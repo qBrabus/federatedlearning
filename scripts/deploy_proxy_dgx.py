@@ -25,6 +25,7 @@ import shlex
 import subprocess
 import sys
 import tempfile
+from threading import Thread
 from datetime import datetime
 from pathlib import Path
 
@@ -113,6 +114,21 @@ def ssh(host: str, command: str, logger: logging.Logger) -> None:
 
 def scp(source: str, destination: str, logger: logging.Logger) -> None:
     run_command(["scp", "-r", source, destination], logger, label="scp")
+
+
+def stream_logs(host: str, container: str, logger: logging.Logger, tail: int = 500) -> Thread:
+    """Stream docker logs from a remote host in a background thread."""
+
+    def _target() -> None:
+        try:
+            ssh(host, f"docker logs -f --tail {tail} {quote(container)}", logger)
+        except subprocess.CalledProcessError:
+            # Error already logged by run_command/ssh
+            pass
+
+    thread = Thread(target=_target, daemon=True)
+    thread.start()
+    return thread
 
 
 def repo_name_from_url(url: str) -> str:
@@ -214,7 +230,15 @@ def main() -> None:
     sync_certs(args.proxy_host, args.proxy_base, args.dgx_host, args.dgx_base, repo_name, logger)
     build_and_run(args.dgx_host, args.dgx_base, repo_name, "client", logger)
 
-    info(logger, "Déploiement terminé")
+    info(logger, "Déploiement terminé, streaming des logs docker (Ctrl+C pour arrêter)...")
+
+    log_threads = [
+        stream_logs(args.proxy_host, "fl-orchestrator", logger),
+        stream_logs(args.dgx_host, "fl-client-dgx", logger),
+    ]
+
+    for thread in log_threads:
+        thread.join()
 
 
 if __name__ == "__main__":

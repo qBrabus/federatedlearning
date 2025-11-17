@@ -61,6 +61,10 @@ command -v openssl >/dev/null 2>&1 || {
 }
 
 mkdir -p "$ORCH_DIR" "$CLIENT_DIR" "$CERTS_ROOT"
+# Rendre les répertoires traversables par les utilisateurs non-root dans les
+# conteneurs (sinon le montage en read-only bloque la lecture des fichiers
+# malgré les permissions 644 sur les certificats).
+chmod 755 "$CERTS_ROOT" "$ORCH_DIR" "$CLIENT_DIR"
 
 CA_KEY="$CERTS_ROOT/ca.key"
 CA_CERT="$CERTS_ROOT/ca.crt"
