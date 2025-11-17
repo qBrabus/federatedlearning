@@ -172,11 +172,11 @@ def main() -> None:
 
     tls_config = build_tls() if config.use_tls else None
 
-    start_signature = inspect.signature(fl.client.start_numpy_client).parameters
+    start_signature = inspect.signature(fl.client.start_client).parameters
 
     start_kwargs: dict = {
         "server_address": config.server_address,
-        "client": client,
+        "client": client.to_client(),
     }
 
     if tls_config:
@@ -195,7 +195,7 @@ def main() -> None:
             else:
                 print("Client certificates provided but not supported by this Flower version; proceeding without mTLS.")
 
-    fl.client.start_numpy_client(**start_kwargs)
+    fl.client.start_client(**start_kwargs)
 
 
 if __name__ == "__main__":
