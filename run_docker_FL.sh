@@ -89,7 +89,28 @@ case "$COMPONENT" in
 
     if [[ "$SELF_SIGNED" == "true" ]]; then
       echo "[run] génération de certificats auto-signés pour le client..." >&2
-      "$CERT_SCRIPT" --orch-dir "$(pwd)/certs/orchestrator" --client-dir "$CERTS_DIR"
+      if [[ -f "$CLIENT_ENV_FILE" ]]; then
+        # Rendez la configuration disponible pour l'extraction de SERVER_ADDRESS
+        set -a
+        source "$CLIENT_ENV_FILE"
+        set +a
+      fi
+
+      SERVER_SAN="${CERT_SERVER_SAN:-DNS:localhost,IP:127.0.0.1}"
+      if [[ -n "${SERVER_ADDRESS:-}" ]]; then
+        server_host="${SERVER_ADDRESS%%:*}"
+        if [[ "$server_host" =~ ^[0-9]+(\.[0-9]+){3}$ ]]; then
+          san_entry="IP:${server_host}"
+        else
+          san_entry="DNS:${server_host}"
+        fi
+
+        if [[ "$SERVER_SAN" != *"$san_entry"* ]]; then
+          SERVER_SAN+=",${san_entry}"
+        fi
+      fi
+
+      CERT_SERVER_SAN="$SERVER_SAN" "$CERT_SCRIPT" --orch-dir "$(pwd)/certs/orchestrator" --client-dir "$CERTS_DIR"
       # Force l'utilisation de TLS lorsque des certificats auto-signés sont générés
       export USE_TLS=true
     fi
