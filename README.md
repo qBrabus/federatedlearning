@@ -122,6 +122,8 @@ SELF_SIGNED=true ./scripts/test_e2e_local.sh
 - mTLS côté client requiert `USE_TLS=true` et les trois fichiers `CA_CERT_PATH`, `CLIENT_CERT_PATH`, `CLIENT_KEY_PATH`.
 - Les fichiers peuvent être montés en lecture seule depuis l'hôte (recommandé).
 - Si vous n'avez pas encore vos certificats officiels, utilisez `--self-signed` ou `SELF_SIGNED=true` sur les scripts fournis : un bundle CA + serveur + client sera généré automatiquement dans `certs/` avec les chemins déjà alignés sur les `.env`.
+- Pour des connexions inter-machines, copiez le contenu de `certs/` généré sur l'orchestrateur vers chaque client (au minimum `certs/ca.crt` et `certs/client/*`) afin que tous partagent la même autorité de certification. Ne regénérez pas un nouveau CA sur chaque machine, sinon la vérification TLS échouera.
+- Si l'orchestrateur écoute sur une IP ou un FQDN différent de `localhost`, exportez la variable `CERT_SERVER_SAN` avant de lancer `--self-signed` (ex. `CERT_SERVER_SAN="DNS:localhost,IP:127.0.0.1,IP:10.200.241.101"`) pour que le certificat serveur contienne le SAN adapté.
 
 ## Personnalisation du code client
 - Le modèle de démonstration se trouve dans `client/app/client.py` (`SimpleNet`). Remplacez-le par votre modèle PyTorch et vos loaders.

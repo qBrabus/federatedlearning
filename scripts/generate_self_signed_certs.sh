@@ -21,8 +21,11 @@ ORCH_DIR=$(pwd)/certs/orchestrator
 CLIENT_DIR=$(pwd)/certs/client
 CERTS_ROOT=$(pwd)/certs
 DAYS=365
-SERVER_SAN="DNS:localhost,IP:127.0.0.1"
-CLIENT_SAN="DNS:fl-client.local"
+# Permettre la personnalisation via des variables d'environnement pour éviter
+# les erreurs de validation lors de connexions inter-machines (ex: IP publique
+# ou FQDN différent de localhost).
+SERVER_SAN="${CERT_SERVER_SAN:-DNS:localhost,IP:127.0.0.1}"
+CLIENT_SAN="${CERT_CLIENT_SAN:-DNS:fl-client.local}"
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
