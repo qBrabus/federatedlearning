@@ -90,6 +90,8 @@ case "$COMPONENT" in
     if [[ "$SELF_SIGNED" == "true" ]]; then
       echo "[run] génération de certificats auto-signés pour le client..." >&2
       "$CERT_SCRIPT" --orch-dir "$(pwd)/certs/orchestrator" --client-dir "$CERTS_DIR"
+      # Force l'utilisation de TLS lorsque des certificats auto-signés sont générés
+      export USE_TLS=true
     fi
 
     if [[ ! -f "$CLIENT_ENV_FILE" && -f "${CLIENT_ENV_FILE}.example" ]]; then
@@ -106,6 +108,7 @@ case "$COMPONENT" in
       --gpus all \
       --name fl-client-dgx \
       --env-file "$CLIENT_ENV_FILE" \
+      -e USE_TLS=${USE_TLS:-true} \
       -e CA_CERT_PATH=${CA_CERT_PATH:-/certs/ca.crt} \
       -e CLIENT_CERT_PATH=${CLIENT_CERT_PATH:-/certs/client.crt} \
       -e CLIENT_KEY_PATH=${CLIENT_KEY_PATH:-/certs/client.key} \
