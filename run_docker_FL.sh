@@ -85,7 +85,6 @@ case "$COMPONENT" in
       --gpus all \
       --name fl-client-dgx \
       --env-file "$CLIENT_ENV_FILE" \
-      -e USE_TLS=${USE_TLS:-true} \
       -e CA_CERT_PATH=${CA_CERT_PATH:-/certs/ca.crt} \
       -e CLIENT_CERT_PATH=${CLIENT_CERT_PATH:-/certs/client.crt} \
       -e CLIENT_KEY_PATH=${CLIENT_KEY_PATH:-/certs/client.key} \
