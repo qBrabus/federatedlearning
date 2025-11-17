@@ -27,6 +27,30 @@ DAYS=365
 SERVER_SAN="${CERT_SERVER_SAN:-DNS:localhost,IP:127.0.0.1}"
 CLIENT_SAN="${CERT_CLIENT_SAN:-DNS:fl-client.local}"
 
+append_host_ips_to_san() {
+  local san="$1"
+  local ips
+
+  # hostname -I renvoie les IP connues de l'hôte (inclut l'IP publique/privée
+  # utilisée par les clients pour se connecter). On les ajoute aux SAN si elles
+  # ne sont pas déjà présentes afin d'éviter les erreurs "peer name ... is not
+  # in peer certificate" lors de connexions inter-machines.
+  ips=$(hostname -I 2>/dev/null || true)
+  for ip in $ips; do
+    # Nettoyage d'éventuels espaces ou retours à la ligne
+    ip="${ip//[[:space:]]/}"
+    [[ -z "$ip" ]] && continue
+
+    if [[ "$san" != *"IP:${ip}"* && "$san" != *"IP Address:${ip}"* ]]; then
+      san+="${san:+,}IP:${ip}"
+    fi
+  done
+
+  echo "$san"
+}
+
+SERVER_SAN=$(append_host_ips_to_san "$SERVER_SAN")
+
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --orch-dir)
@@ -107,15 +131,56 @@ EOFCONF
   rm -f "$csr" "$tmpconf"
 }
 
-if [[ ! -f $SERVER_CERT || ! -f $SERVER_KEY ]]; then
-  echo "[certs] génération du certificat serveur auto-signé..." >&2
+has_all_sans() {
+  local cert_path="$1"
+  local desired_sans="$2"
+
+  [[ ! -f "$cert_path" ]] && return 1
+
+  # openssl renvoie les SAN sur une ou plusieurs lignes sous la forme
+  # "DNS:localhost, IP Address:127.0.0.1". On se contente de vérifier que
+  # chaque entrée demandée est présente en texte brut.
+  local san_output
+  san_output=$(openssl x509 -in "$cert_path" -noout -ext subjectAltName 2>/dev/null || true)
+
+  IFS=',' read -ra entries <<<"$desired_sans"
+  for entry in "${entries[@]}"; do
+    local trimmed="${entry//[[:space:]]/}"
+    [[ -z "$trimmed" ]] && continue
+    # openssl remplace "IP:" par "IP Address:" dans le rendu texte
+    local normalized="$trimmed"
+    if [[ $trimmed == IP:* ]]; then
+      normalized="IP Address:${trimmed#IP:}"
+    fi
+    if [[ $trimmed == DNS:* ]]; then
+      normalized="DNS:${trimmed#DNS:}"
+    fi
+
+    if [[ $san_output != *"$normalized"* ]]; then
+      return 1
+    fi
+  done
+
+  return 0
+}
+
+if [[ ! -f $SERVER_CERT || ! -f $SERVER_KEY ]] || ! has_all_sans "$SERVER_CERT" "$SERVER_SAN"; then
+  if [[ -f $SERVER_CERT || -f $SERVER_KEY ]]; then
+    echo "[certs] SAN demandé différent, régénération du certificat serveur..." >&2
+  else
+    echo "[certs] génération du certificat serveur auto-signé..." >&2
+  fi
   make_cert "fl-orchestrator.local" "$SERVER_SAN" "$SERVER_KEY" "$SERVER_CERT"
 else
   echo "[certs] certificats serveur déjà présents" >&2
 fi
 
-if [[ ! -f $CLIENT_CERT || ! -f $CLIENT_KEY ]]; then
-  echo "[certs] génération du certificat client auto-signé..." >&2
+if [[ ! -f $CLIENT_CERT || ! -f $CLIENT_KEY ]] || ! has_all_sans "$CLIENT_CERT" "$CLIENT_SAN"; then
+  if [[ -f $CLIENT_CERT || -f $CLIENT_KEY ]]; then
+    echo "[certs] SAN demandé différent, régénération du certificat client..." >&2
+  else
+    echo "[certs] génération du certificat client auto-signé..." >&2
+  fi
   make_cert "fl-client.local" "$CLIENT_SAN" "$CLIENT_KEY" "$CLIENT_CERT"
 else
   echo "[certs] certificats client déjà présents" >&2
