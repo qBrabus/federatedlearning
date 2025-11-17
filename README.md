@@ -49,7 +49,7 @@ cp client/.env.example client/.env
 ```
 
 ### Orchestrateur (`orchestrator/.env`)
-- `FLOWER_SERVER_ADDRESS` : adresse d'écoute (ex. `0.0.0.0`).
+- `FLOWER_SERVER_ADDRESS` : adresse d'écoute (ex. `0.0.0.0`). Utilisez `0.0.0.0` si les clients se connectent depuis un autre hôte ; `127.0.0.1` limite l'écoute à la boucle locale à l'intérieur du conteneur et empêche les connexions externes.
 - `FLOWER_SERVER_PORT` : port d'écoute (ex. `8080` ou `443`).
 - `GRPC_MAX_MESSAGE_LENGTH` : taille max des messages gRPC (par défaut 512 MiB).
 - `NUM_ROUNDS` : nombre de rounds de fédération.
