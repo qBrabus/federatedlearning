@@ -20,6 +20,32 @@ Ce dépôt fournit des assets Docker prêts à l'emploi, des variables d'environ
 - **Client DGX** : client Flower basé sur PyTorch avec CUDA **12.4**, prêt pour une station DGX/NVIDIA.
 - **Workload de démonstration** : modèle PyTorch simple entraîné sur des données synthétiques pour valider la chaîne de fédération. Remplacez‑le par votre code métier lorsque l'infrastructure est validée.
 
+### Installation express
+1. Cloner le dépôt :
+   ```bash
+   git clone https://github.com/qBrabus/federatedlearning.git
+   cd federatedlearning
+   ```
+2. Copier les variables d'environnement de base :
+   ```bash
+   cp orchestrator/.env.example orchestrator/.env
+   cp client/.env.example client/.env
+   ```
+3. Construire les images (avec certificats auto-signés pour tester) :
+   ```bash
+   ./build_docker_FL.sh all --self-signed
+   ```
+4. Lancer orchestrateur + client en local (GPU requis pour le client) :
+   ```bash
+   ./run_docker_FL.sh orchestrator --self-signed --detach
+   ./run_docker_FL.sh client --self-signed
+   ```
+5. Suivre les logs des conteneurs :
+   ```bash
+   docker logs -f fl-orchestrator
+   docker logs -f fl-client-dgx
+   ```
+
 ## Prérequis techniques
 - Docker 24+ sur les hôtes orchestrateur et client.
 - NVIDIA Container Toolkit installé sur le DGX (accès GPU requis pour le client).
@@ -41,6 +67,21 @@ Ce dépôt fournit des assets Docker prêts à l'emploi, des variables d'environ
 - `scripts/generate_self_signed_certs.sh` : utilitaire pour produire un bundle CA + serveur + client auto-signés.
 - `certs/` (à créer) : emplacement attendu pour vos certificats.
 - `data/` (créé au run) : répertoire monté dans le conteneur client.
+
+### Exécution Python sans Docker (diagnostic)
+Vous pouvez lancer le code directement en local pour vérifier votre environnement avant de créer les images :
+```bash
+python -m venv .venv
+source .venv/bin/activate
+pip install -r orchestrator/requirements.txt -r client/requirements.txt
+
+# Terminal 1 (orchestrateur CPU)
+FLOWER_SERVER_ADDRESS=127.0.0.1 FLOWER_SERVER_PORT=8080 python -m orchestrator.app.server
+
+# Terminal 2 (client CPU, données synthétiques)
+SERVER_ADDRESS=127.0.0.1:8080 USE_TLS=false python -m client.app.client
+```
+⚠️ Cette exécution n'active pas CUDA et sert uniquement de smoke test local.
 
 ## Configuration des environnements
 Copiez les modèles et renseignez vos adresses IP/ports/certificats :
@@ -91,6 +132,7 @@ Le client est basé sur PyTorch CUDA 12.4 (runtime) afin d'être compatible avec
 ```
 - Monte `certs/client` et `data/` dans le conteneur (créés si absents).
 - Nécessite `--gpus all` (NVIDIA Container Toolkit).
+- Les variables `SERVER_ADDRESS` et `USE_TLS` peuvent être surchargées à l'exécution via `-e` si vous ne souhaitez pas modifier `client/.env` (ex. `docker run ... -e SERVER_ADDRESS=10.0.0.5:443`).
 
 ## Déploiement automatisé PROXY + DGX (Python)
 Le script `scripts/deploy_proxy_dgx.py` s'exécute depuis **votre poste** et enchaîne clone/pull, copie des `.env`, build + run, puis synchronisation des certificats entre le proxy (orchestrateur) et le DGX (client) en s'appuyant sur votre configuration SSH locale.
@@ -136,6 +178,7 @@ SELF_SIGNED=true ./scripts/test_e2e_local.sh
 ```
 - Pré-requis : avoir construit les deux images et renseigné `orchestrator/.env` + `client/.env` avec des valeurs locales (ex. `127.0.0.1:8080`).
 - Le script lance l'orchestrateur en arrière-plan, exécute un client, attend la fin du round puis arrête le conteneur serveur.
+- Si vous souhaitez exécuter plusieurs clients simultanément, relancez la commande `docker run ... fl-client-dgx:latest` dans plusieurs terminaux en veillant à utiliser le même `SERVER_ADDRESS`.
 
 ### 2. Test manuel pas-à-pas
 1. Démarrer l'orchestrateur dans un terminal :
@@ -171,4 +214,5 @@ SELF_SIGNED=true ./scripts/test_e2e_local.sh
 - **Pas de GPU détecté** : exécutez `nvidia-smi` sur l'hôte et assurez-vous que le runtime Docker est configuré pour NVIDIA.
 - **Timeouts gRPC** : augmentez `GRPC_MAX_MESSAGE_LENGTH` et vérifiez la latence réseau.
 - **Certificats non trouvés** : assurez-vous que `certs/orchestrator` et `certs/client` existent et contiennent les bons chemins référencés dans `.env`.
+- **Ports déjà utilisés** : ajustez `FLOWER_SERVER_PORT` ou `HOST_PORT_OVERRIDE` dans `orchestrator/.env` et relancez `run_docker_FL.sh`.
 
