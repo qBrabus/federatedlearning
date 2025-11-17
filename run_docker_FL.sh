@@ -7,15 +7,17 @@ if [[ -t 0 ]]; then
 fi
 
 usage() {
-  echo "Usage: $0 [orchestrator|client] [--self-signed]" >&2
+  echo "Usage: $0 [orchestrator|client] [--self-signed] [--detach]" >&2
   echo "Exemples:" >&2
-  echo "  $0 orchestrator            # lance le serveur Flower" >&2
-  echo "  $0 client                  # lance un client DGX (GPU requis)" >&2
+  echo "  $0 orchestrator                 # lance le serveur Flower" >&2
+  echo "  $0 client                       # lance un client DGX (GPU requis)" >&2
   echo "  $0 orchestrator --self-signed   # génère et monte des certificats auto-signés" >&2
+  echo "  $0 orchestrator --detach        # lance en arrière-plan (utile pour le déploiement)" >&2
   exit 1
 }
 
 SELF_SIGNED=${SELF_SIGNED:-false}
+DETACH=${DETACH:-false}
 COMPONENT=""
 
 while [[ $# -gt 0 ]]; do
@@ -26,6 +28,10 @@ while [[ $# -gt 0 ]]; do
       ;;
     --self-signed)
       SELF_SIGNED=true
+      shift
+      ;;
+    --detach)
+      DETACH=true
       shift
       ;;
     *)
@@ -60,7 +66,12 @@ case "$COMPONENT" in
     set +a
     HOST_PORT=${HOST_PORT_OVERRIDE:-$FLOWER_SERVER_PORT}
 
-    docker run --rm ${DOCKER_TTY_FLAG} \
+    DOCKER_DETACH_FLAG=""
+    if [[ "$DETACH" == "true" ]]; then
+      DOCKER_DETACH_FLAG="-d"
+    fi
+
+    docker run --rm ${DOCKER_TTY_FLAG} ${DOCKER_DETACH_FLAG} \
       --name fl-orchestrator \
       --env-file "$ORCH_ENV_FILE" \
       -e CA_CERT_PATH=${CA_CERT_PATH:-/certs/ca.crt} \
@@ -86,7 +97,12 @@ case "$COMPONENT" in
       CLIENT_ENV_FILE="${CLIENT_ENV_FILE}.example"
     fi
 
-    docker run --rm ${DOCKER_TTY_FLAG} \
+    DOCKER_DETACH_FLAG=""
+    if [[ "$DETACH" == "true" ]]; then
+      DOCKER_DETACH_FLAG="-d"
+    fi
+
+    docker run --rm ${DOCKER_TTY_FLAG} ${DOCKER_DETACH_FLAG} \
       --gpus all \
       --name fl-client-dgx \
       --env-file "$CLIENT_ENV_FILE" \
