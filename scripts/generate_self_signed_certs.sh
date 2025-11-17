@@ -118,4 +118,8 @@ fi
 cp "$CA_CERT" "$ORCH_DIR/ca.crt"
 cp "$CA_CERT" "$CLIENT_DIR/ca.crt"
 
+# Rendre les certificats lisibles par les utilisateurs non root dans les conteneurs
+chmod 644 "$CA_CERT" "$ORCH_DIR/ca.crt" "$CLIENT_DIR/ca.crt" \
+  "$SERVER_CERT" "$CLIENT_CERT" "$SERVER_KEY" "$CLIENT_KEY"
+
 echo "[certs] certificats auto-signés générés dans:\n  - $ORCH_DIR\n  - $CLIENT_DIR" >&2

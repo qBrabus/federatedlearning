@@ -139,18 +139,18 @@ class FlowerClient(fl.client.NumPyClient):
         return float(avg_loss), len(self.valloader.dataset), {"accuracy": accuracy}
 
 
-def build_tls() -> fl.common.transport.client.GrpcsSecureChannelConfig | None:
+def build_tls() -> Tuple[bytes | None, bytes | None, bytes | None] | None:
     """Construit la configuration TLS/mTLS si les fichiers sont présents."""
 
     ca_path = os.getenv("CA_CERT_PATH")
     client_cert = os.getenv("CLIENT_CERT_PATH")
     client_key = os.getenv("CLIENT_KEY_PATH")
 
-    if ca_path and client_cert and client_key:
-        return fl.common.transport.client.GrpcsSecureChannelConfig(
-            root_certificates=Path(ca_path).read_bytes(),
-            certificate_chain=Path(client_cert).read_bytes(),
-            private_key=Path(client_key).read_bytes(),
+    if ca_path:
+        return (
+            Path(ca_path).read_bytes(),
+            Path(client_cert).read_bytes() if client_cert else None,
+            Path(client_key).read_bytes() if client_key else None,
         )
     return None
 
@@ -174,9 +174,9 @@ def main() -> None:
     fl.client.start_numpy_client(
         server_address=config.server_address,
         client=client,
-        root_certificates=tls_config.root_certificates if tls_config else None,
-        certificate_chain=tls_config.certificate_chain if tls_config else None,
-        private_key=tls_config.private_key if tls_config else None,
+        root_certificates=tls_config[0] if tls_config else None,
+        certificate_chain=tls_config[1] if tls_config else None,
+        private_key=tls_config[2] if tls_config else None,
     )
 
 
