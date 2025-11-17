@@ -93,6 +93,8 @@ def run_command(command: list[str], logger: logging.Logger, label: str) -> None:
         stderr=subprocess.STDOUT,
         text=True,
         bufsize=1,
+        encoding="utf-8",
+        errors="replace",
     )
 
     assert process.stdout is not None
