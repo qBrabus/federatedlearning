@@ -28,6 +28,7 @@ import tempfile
 from threading import Thread
 from datetime import datetime
 from pathlib import Path
+import time
 
 DEFAULT_REPO_URL = "https://github.com/qBrabus/federatedlearning"
 DEFAULT_PROXY_HOST = "PROXY"
@@ -116,15 +117,25 @@ def scp(source: str, destination: str, logger: logging.Logger) -> None:
     run_command(["scp", "-r", source, destination], logger, label="scp")
 
 
-def stream_logs(host: str, container: str, logger: logging.Logger, tail: int = 500) -> Thread:
+def stream_logs(host: str, container: str, logger: logging.Logger, tail: int = 500, retries: int = 10) -> Thread:
     """Stream docker logs from a remote host in a background thread."""
 
     def _target() -> None:
-        try:
-            ssh(host, f"docker logs -f --tail {tail} {quote(container)}", logger)
-        except subprocess.CalledProcessError:
-            # Error already logged by run_command/ssh
-            pass
+        for attempt in range(1, retries + 1):
+            try:
+                ssh(host, f"docker logs -f --tail {tail} {quote(container)}", logger)
+                break
+            except subprocess.CalledProcessError:
+                if attempt == retries:
+                    logger.error("[%s] Impossible de suivre les logs après %s tentatives", container, retries)
+                else:
+                    logger.warning(
+                        "[%s] Logs indisponibles (tentative %s/%s), nouvel essai dans 2s...",
+                        container,
+                        attempt,
+                        retries,
+                    )
+                    time.sleep(2)
 
     thread = Thread(target=_target, daemon=True)
     thread.start()
