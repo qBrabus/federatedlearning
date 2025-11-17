@@ -5,6 +5,7 @@ valider la chaîne de bout en bout. Personnalisez le modèle, les loaders
 et les métriques selon vos besoins.
 """
 
+import inspect
 import os
 from dataclasses import dataclass
 from pathlib import Path
@@ -171,13 +172,30 @@ def main() -> None:
 
     tls_config = build_tls() if config.use_tls else None
 
-    fl.client.start_numpy_client(
-        server_address=config.server_address,
-        client=client,
-        root_certificates=tls_config[0] if tls_config else None,
-        certificate_chain=tls_config[1] if tls_config else None,
-        private_key=tls_config[2] if tls_config else None,
-    )
+    start_signature = inspect.signature(fl.client.start_numpy_client).parameters
+
+    start_kwargs: dict = {
+        "server_address": config.server_address,
+        "client": client,
+    }
+
+    if tls_config:
+        start_kwargs["root_certificates"] = tls_config[0]
+
+        # Support both modern (client_certificates) and older (certificate_chain/private_key)
+        # Flower signatures. Only pass arguments that are explicitly accepted to
+        # avoid breaking on older versions.
+        client_cert, client_key = tls_config[1], tls_config[2]
+        if client_cert and client_key:
+            if "client_certificates" in start_signature:
+                start_kwargs["client_certificates"] = (client_cert, client_key)
+            elif "certificate_chain" in start_signature and "private_key" in start_signature:
+                start_kwargs["certificate_chain"] = client_cert
+                start_kwargs["private_key"] = client_key
+            else:
+                print("Client certificates provided but not supported by this Flower version; proceeding without mTLS.")
+
+    fl.client.start_numpy_client(**start_kwargs)
 
 
 if __name__ == "__main__":
