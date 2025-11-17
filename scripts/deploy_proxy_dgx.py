@@ -85,7 +85,7 @@ def build_and_run(host: str, base_dir: str, repo_name: str, component: str) -> N
     remote_cmd = (
         f"cd {quote(base_dir)}/{quote(repo_name)} && "
         f"./build_docker_FL.sh {component} --self-signed && "
-        f"./run_docker_FL.sh {component} --self-signed"
+        f"./run_docker_FL.sh {component} --self-signed --detach"
     )
     info(f"{host}: build + run {component}")
     ssh(host, remote_cmd)
