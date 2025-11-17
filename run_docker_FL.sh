@@ -1,6 +1,11 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+DOCKER_TTY_FLAG=""
+if [[ -t 0 ]]; then
+  DOCKER_TTY_FLAG="-it"
+fi
+
 usage() {
   echo "Usage: $0 [orchestrator|client] [--self-signed]" >&2
   echo "Exemples:" >&2
@@ -55,7 +60,7 @@ case "$COMPONENT" in
     set +a
     HOST_PORT=${HOST_PORT_OVERRIDE:-$FLOWER_SERVER_PORT}
 
-    docker run --rm -it \
+    docker run --rm ${DOCKER_TTY_FLAG} \
       --name fl-orchestrator \
       --env-file "$ORCH_ENV_FILE" \
       -e CA_CERT_PATH=${CA_CERT_PATH:-/certs/ca.crt} \
@@ -81,7 +86,7 @@ case "$COMPONENT" in
       CLIENT_ENV_FILE="${CLIENT_ENV_FILE}.example"
     fi
 
-    docker run --rm -it \
+    docker run --rm ${DOCKER_TTY_FLAG} \
       --gpus all \
       --name fl-client-dgx \
       --env-file "$CLIENT_ENV_FILE" \
