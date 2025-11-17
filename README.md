@@ -9,10 +9,11 @@ Ce dépôt fournit des assets Docker prêts à l'emploi, des variables d'environ
 4. [Configuration des environnements](#configuration-des-environnements)
 5. [Construction des images Docker](#construction-des-images-docker)
 6. [Exécution des conteneurs](#exécution-des-conteneurs)
-7. [Tests locaux et recettes](#tests-locaux-et-recettes)
-8. [TLS/mTLS](#tlsmtls)
-9. [Personnalisation du code client](#personnalisation-du-code-client)
-10. [Dépannage](#dépannage)
+7. [Déploiement automatisé PROXY + DGX](#déploiement-automatisé-proxy--dgx)
+8. [Tests locaux et recettes](#tests-locaux-et-recettes)
+9. [TLS/mTLS](#tlsmtls)
+10. [Personnalisation du code client](#personnalisation-du-code-client)
+11. [Dépannage](#dépannage)
 
 ## Aperçu rapide
 - **Orchestrateur (Hub)** : serveur Flower CPU qui agrège les poids envoyés par les clients.
@@ -90,6 +91,40 @@ Le client est basé sur PyTorch CUDA 12.4 (runtime) afin d'être compatible avec
 ```
 - Monte `certs/client` et `data/` dans le conteneur (créés si absents).
 - Nécessite `--gpus all` (NVIDIA Container Toolkit).
+
+## Déploiement automatisé PROXY + DGX (Python)
+Le script `scripts/deploy_proxy_dgx.py` s'exécute depuis **votre poste** et enchaîne clone/pull, copie des `.env`, build + run, puis synchronisation des certificats entre le proxy (orchestrateur) et le DGX (client) en s'appuyant sur votre configuration SSH locale.
+
+Pré-requis :
+- Un fichier `~/.ssh/config` avec deux hôtes nommés `PROXY` et `DGX` (clés privées, ports et utilisateurs configurés).
+- Accès aux chemins distants par défaut `/home/qladane/federated` (proxy) et `/raid/workspace/qladane/federated` (DGX) ou surcharge via options CLI.
+- Docker et (pour le client) NVIDIA Container Toolkit déjà installés sur les machines distantes.
+
+Exécution :
+```bash
+# Depuis votre machine, à la racine du dépôt cloné localement
+./scripts/deploy_proxy_dgx.py \
+  --proxy-host PROXY --dgx-host DGX \
+  --proxy-base /home/qladane/federated --dgx-base /raid/workspace/qladane/federated
+```
+
+Ce que fait le script :
+1. Clone ou met à jour `https://github.com/qBrabus/federatedlearning` sur le proxy et le DGX.
+2. Copie `orchestrator/.env.example` → `orchestrator/.env` sur le proxy et `client/.env.example` → `client/.env` sur le DGX.
+3. Construit et lance l'orchestrateur sur le proxy en mode auto-signé.
+4. Copie le dossier `certs/` généré sur le proxy vers le DGX pour partager **la même autorité de certification** (CA) entre orchestrateur et clients.
+5. Construit et lance le client sur le DGX en réutilisant ces certificats.
+
+Conseil : si l'orchestrateur écoute sur une IP/FQDN autre que `localhost`, définissez `CERT_SERVER_SAN` dans votre environnement avant d'appeler le script pour que le certificat serveur contienne le SAN adéquat.
+
+Nettoyage :
+```bash
+./scripts/cleanup_proxy_dgx.py \
+  --proxy-host PROXY --dgx-host DGX \
+  --proxy-base /home/qladane/federated --dgx-base /raid/workspace/qladane/federated
+```
+Ce script arrête/supprime les conteneurs `fl-orchestrator` et `fl-client-dgx`, supprime les images associées et efface le dépôt cloné sur chaque machine distante.
+
 
 ## Tests locaux et recettes
 ### 1. Test de fumée orchestrateur + client (local Docker)
