@@ -1,68 +1,45 @@
-"""Serveur Flower orchestrateur configurable.
+"""Démarrage de l'orchestrateur via la CLI moderne ``flower-superlink``.
 
-Les variables d'environnement permettent d'ajuster l'adresse d'écoute,
-le nombre de rounds et les paramètres du strategy FedAvg. TLS/mTLS est
-activé automatiquement si les trois fichiers de certificats sont fournis
-(et montés dans `/certs`).
+Les variables d'environnement permettent d'ajuster l'adresse d'écoute et
+d'activer TLS/mTLS. L'ancienne API ``fl.server.start_server`` étant
+dépréciée, ce module se contente de construire et d'exécuter la commande
+``flower-superlink`` avec ou sans certificats.
 """
 
 import os
-from pathlib import Path
-from typing import Optional, Tuple
-
-import flwr as fl
-
-Certificates = Tuple[bytes, bytes, bytes]
+import shlex
+import subprocess
 
 
-def get_env(name: str, default: str | None = None) -> str:
-    """Retourne la valeur d'une variable d'environnement ou lève une erreur."""
-
-    value = os.getenv(name, default)
-    if value is None:
-        raise ValueError(f"Missing required environment variable: {name}")
-    return value
-
-
-def build_certificates() -> Optional[Certificates]:
-    """Charge les certificats TLS si les trois chemins sont présents."""
+def build_tls_args() -> list[str]:
+    """Construit les arguments CLI TLS/mTLS pour ``flower-superlink``."""
 
     ca_path = os.getenv("CA_CERT_PATH")
     cert_path = os.getenv("SERVER_CERT_PATH")
     key_path = os.getenv("SERVER_KEY_PATH")
+    use_tls = os.getenv("USE_TLS", "true").lower() in {"1", "true", "yes"}
 
-    if ca_path and cert_path and key_path:
-        return (
-            Path(ca_path).read_bytes(),
-            Path(cert_path).read_bytes(),
-            Path(key_path).read_bytes(),
-        )
-    return None
+    if use_tls and cert_path and key_path:
+        args = ["--ssl-certfile", cert_path, "--ssl-keyfile", key_path]
+        if ca_path:
+            args.extend(["--ssl-ca-certfile", ca_path])
+        return args
+
+    return ["--insecure"]
 
 
 def main() -> None:
-    """Démarre le serveur Flower avec la stratégie FedAvg par défaut."""
+    """Démarre un SuperLink Flower via la CLI moderne ``flower-superlink``."""
 
-    server_host = get_env("FLOWER_SERVER_ADDRESS", "0.0.0.0")
-    server_port = get_env("FLOWER_SERVER_PORT", "8080")
-    num_rounds = int(os.getenv("NUM_ROUNDS", "3"))
-    grpc_max_message_length = int(get_env("GRPC_MAX_MESSAGE_LENGTH", "536870912"))
+    server_host = os.getenv("FLOWER_SERVER_ADDRESS", "0.0.0.0")
+    server_port = os.getenv("FLOWER_SERVER_PORT", "8080")
 
-    # Seuils clients attendus par FedAvg
-    strategy = fl.server.strategy.FedAvg(
-        min_fit_clients=int(os.getenv("MIN_FIT_CLIENTS", "2")),
-        min_available_clients=int(os.getenv("MIN_AVAILABLE_CLIENTS", "2")),
-    )
+    fleet_address = f"{server_host}:{server_port}"
+    command = ["flower-superlink", "--fleet-api-address", fleet_address]
+    command.extend(build_tls_args())
 
-    certificates = build_certificates()
-    print(f"Starting Flower server on {server_host}:{server_port}")
-    fl.server.start_server(
-        server_address=f"{server_host}:{server_port}",
-        config=fl.server.ServerConfig(num_rounds=num_rounds),
-        strategy=strategy,
-        grpc_max_message_length=grpc_max_message_length,
-        certificates=certificates,
-    )
+    print("Starting Flower SuperLink with:", " ".join(shlex.quote(part) for part in command))
+    subprocess.run(command, check=True)
 
 
 if __name__ == "__main__":
