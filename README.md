@@ -1,86 +1,122 @@
-# Plateforme Flower fédérée (orchestrateur + client DGX)
+# Plateforme d'apprentissage fédéré Flower (orchestrateur + client DGX)
 
-Ce dépôt fournit une démonstration complète d'apprentissage fédéré basée sur **Flower** avec un orchestrateur (hub) et un client de calcul DGX. Il inclut un script de déploiement de bout en bout qui prépare les hôtes, construit les images Docker, exécute des tests gRPC/mTLS, puis arrête proprement les conteneurs en fournissant les commandes de relance.
+Ce dépôt regroupe une démonstration complète d'apprentissage fédéré avec **Flower 1.23**. Il fournit deux images Docker (hub/orchestrateur et client DGX) et une boîte à outils d'automatisation pour déployer, tester et nettoyer un pipeline gRPC sécurisé par TLS/mTLS.
 
-## Objectifs
-- Fournir une topologie de référence : orchestrateur sur `PROXY-DATA (10.200.241.101)` dans `~/federated` et client DGX sur `dgxh200 (10.200.50.45)` dans `/raid/workspace/qladane/federated`.
-- Sécuriser les échanges en **gRPC mTLS** sur le port 443 (le client consomme les certificats générés par le hub).
-- Livrer une automatisation complète : clone Git, installation Docker/Git si manquants, build, run, tests, arrêt, journalisation console + fichier.
-- Documenter l'architecture du code et de l'infra pour faciliter les adaptations.
+## Contenu du dépôt
 
-## Topologie & transport
-- **Orchestrateur** : `PROXY-DATA (10.200.241.101)` — répertoire `~/federated`.
-- **Client DGX** : `dgxh200 (10.200.50.45)` — répertoire `/raid/workspace/qladane/federated`.
-- **Ports** : gRPC exposé sur **443** (configurable).
-- **Sécurité** : mTLS ; le client récupère le CA + cert/clé générés côté hub ou fournis par l'infra.
-
-## Architecture des sources
 ```
 ./
-├─ orchestrator/               # Image du hub Flower (SuperLink gRPC, TLS/mTLS)
-│  ├─ app/server.py            # Construction + exécution de la CLI `flower-superlink`
-│  └─ .env.example             # Variables d'environnement orchestrateur (ports, seuils clients...)
-├─ client/                     # Image du client DGX (PyTorch + Flower)
-│  ├─ app/client.py            # Client Flower générant des données synthétiques
-│  └─ .env.example             # Variables d'environnement client (adresse serveur, TLS...)
+├─ orchestrator/                 # Image Flower SuperLink (hub)
+│  ├─ Dockerfile                 # Python 3.11 slim, exécute flower-superlink
+│  ├─ requirements.txt           # Dépendances (flwr)
+│  └─ app/server.py              # Construction dynamique des arguments TLS et ports
+├─ client/                       # Image client DGX (GPU requis)
+│  ├─ Dockerfile                 # Basée sur pytorch/pytorch:2.4.1-cuda12.4-cudnn9-runtime
+│  ├─ requirements.txt           # flwr + torchmetrics
+│  └─ app/client.py              # Client Flower NumPyClient avec MLP et données synthétiques
 ├─ scripts/
-│  ├─ cleanup_proxy_dgx.py     # Nettoyage des conteneurs/images/dépôts sur les deux hôtes
-│  ├─ deploy_windows_e2e.py    # Déploiement/validation multi-hôtes (Windows ou Linux)
-│  └─ generate_self_signed_certs.sh # Génération de certificats auto-signés (TLS/mTLS)
-├─ build_docker_FL.sh          # Build des images orchestrateur/client
-└─ run_docker_FL.sh            # Lancement des conteneurs orchestrateur/client
+│  ├─ generate_self_signed_certs.sh # Génération CA + certificats serveur/client pour TLS/mTLS
+│  ├─ deploy_windows_e2e.py      # Déploiement/tests orchestrateur + DGX via SSH (Windows/Linux)
+│  └─ cleanup_proxy_dgx.py       # Arrêt des conteneurs, suppression images et dépôt sur les hôtes
+├─ build_docker_FL.sh            # Construction des images (orchestrateur, client ou les deux)
+└─ run_docker_FL.sh              # Lancement des conteneurs avec options TLS/mTLS et détaché
 ```
 
-### Code applicatif
-- **Orchestrateur** (`orchestrator/app/server.py`)
-  - Lit les variables d'environnement (`FLOWER_SERVER_ADDRESS`, `FLOWER_SERVER_PORT`, `USE_TLS`, chemins des certificats).
-  - Lance l'orchestrateur via la CLI **`flower-superlink`** (recommandée par Flower) en TLS/mTLS si les certificats sont fournis, sinon en mode `--insecure`.
-- **Client** (`client/app/client.py`)
-  - Paramétrable via l'environnement (`SERVER_ADDRESS`, `CLIENT_ID`, `N_LOCAL_EPOCHS`, `BATCH_SIZE`, `LEARNING_RATE`, `USE_TLS`, chemins des certificats).
-  - Crée un MLP simple, génère des données synthétiques et se connecte au hub via `fl.client.start_client`. Gère automatiquement le cas TLS/mTLS.
+## Architecture applicative
 
-## Pré-requis machine de pilotage
-- **SSH** et **SCP** fonctionnels (PowerShell, Git Bash ou Linux).
-- **Python 3.10+** pour exécuter `scripts/deploy_windows_e2e.py`.
-- Accès aux hôtes via la configuration SSH ci-dessous.
+- **Orchestrateur** (`orchestrator/app/server.py`) : construit l'appel `flower-superlink` en fonction des variables d'environnement (adresse d'écoute, port gRPC, port ServerApp optionnel). Si `USE_TLS` est vrai et que les fichiers de certificats sont fournis, il ajoute les options `--ssl-certfile`, `--ssl-keyfile` et `--ssl-ca-certfile`; sinon il passe en mode `--insecure`.【F:orchestrator/app/server.py†L13-L43】
+- **Client DGX** (`client/app/client.py`) : implémentation `fl.client.NumPyClient` minimaliste avec un MLP sur données synthétiques. La configuration (adresse serveur, hyperparamètres, TLS/mTLS) est chargée depuis l'environnement ; le client détecte automatiquement CUDA, gère la compatibilité des signatures Flower pour les certificats (arguments `client_certificates` ou `certificate_chain`/`private_key`) et démarre via `fl.client.start_client`.【F:client/app/client.py†L16-L129】【F:client/app/client.py†L146-L213】
 
-### Configuration SSH recommandée
-Ajouter à `~/.ssh/config` (Windows ou Linux) :
-```
-Host DGX
-    HostName 10.200.50.45
-    User quentin
-    Port 22
-    IdentityFile C:\Users\Maquette\.ssh\id_ed25519
-    IdentitiesOnly yes
+## Pré-requis
 
-Host PROXY
-    HostName 10.200.241.101
-    User qladane
-    Port 22
-    IdentityFile C:\Users\Maquette\.ssh\id_ed25519
-    IdentitiesOnly yes
-```
+- **Docker** installé sur les hôtes orchestrateur et client.
+- **GPU NVIDIA + drivers + CUDA 12.4** sur le nœud client (image `pytorch` runtime).
+- **OpenSSL** sur la machine qui génère les certificats (installé par défaut dans les images de build/run).
+- **SSH** et **SCP** fonctionnels depuis la machine de pilotage si vous utilisez l'automatisation multi-hôtes.
 
-Pour éviter de ressaisir le mot de passe (`Melbadina18@!`), générez une clé sans passphrase puis copiez-la une seule fois sur chaque hôte (vous entrerez le mot de passe lors de cette copie, plus besoin ensuite) :
+## Construction des images
+
+Depuis la racine du dépôt :
+
 ```bash
-ssh-keygen -t ed25519 -f ~/.ssh/id_ed25519 -N ""
-ssh-copy-id -i ~/.ssh/id_ed25519.pub PROXY   # saisissez Melbadina18@!
-ssh-copy-id -i ~/.ssh/id_ed25519.pub DGX     # saisissez Melbadina18@!
+./build_docker_FL.sh orchestrator   # Image fl-orchestrator:latest
+./build_docker_FL.sh client         # Image fl-client-dgx:latest (GPU)
+./build_docker_FL.sh all --self-signed  # Construit les deux et génère des certificats de test
 ```
 
-## Déploiement automatisé (Windows ou Linux)
-Le script `scripts/deploy_windows_e2e.py` pilote l'orchestrateur et le client DGX. Il :
-1. Vérifie/installe **Git** et **Docker** sur chaque hôte (via `curl https://get.docker.com | sh` si Docker est absent) et démarre le service Docker.
-2. Clone ou met à jour ce dépôt dans les répertoires cibles (`~/federated` et `/raid/workspace/qladane/federated`).
-3. Prépare les `.env` (copie des exemples si absents) et force des valeurs de test minimales (1 client, port gRPC choisi, TLS/mTLS activé avec certificats partagés).
-4. Construit puis lance les conteneurs via `build_docker_FL.sh` et `run_docker_FL.sh` (option `--self-signed` si demandée pour générer/synchroniser les certificats).
-5. Exécute les tests : version Docker, conteneurs en cours, handshake gRPC/mTLS depuis le conteneur client, extraction des logs Flower.
-6. Arrête proprement les conteneurs après validation et imprime les commandes pour relancer manuellement.
-7. Journalise tout dans un fichier horodaté et en console.
+L'option `--self-signed` appelle `scripts/generate_self_signed_certs.sh` pour créer un CA local et des certificats serveur/client prêts à être montés dans les conteneurs.【F:build_docker_FL.sh†L32-L55】
 
-### Commande type
-Depuis votre poste (PowerShell/Git Bash/Linux) :
+## Génération des certificats (TLS/mTLS)
+
+Le script `scripts/generate_self_signed_certs.sh` crée par défaut :
+
+- `certs/ca.crt` / `certs/ca.key` (autorité de certification)
+- `certs/orchestrator/server.crt` / `server.key`
+- `certs/client/client.crt` / `client.key`
+
+Il ajoute automatiquement les adresses IP locales au SAN du certificat serveur pour éviter les erreurs « peer name ... is not in peer certificate ». Vous pouvez personnaliser les répertoires et les SAN :
+
+```bash
+./scripts/generate_self_signed_certs.sh \
+  --orch-dir ./certs/orchestrator \
+  --client-dir ./certs/client \
+  --server-san "DNS:fl-orchestrator.local,IP:10.0.0.10" \
+  --client-san "DNS:fl-client.local"
+```
+
+Les certificats sont posés en lecture seule (chmod 644) et copiés dans chaque dossier pour correspondre aux chemins `.env` par défaut.【F:scripts/generate_self_signed_certs.sh†L8-L109】【F:scripts/generate_self_signed_certs.sh†L128-L146】
+
+## Lancement manuel (Linux ↔ Linux)
+
+1. **Orchestrateur** (ports 8080/9091 par défaut, `HOST_PORT_OVERRIDE` permet d'exposer un autre port) :
+   ```bash
+   HOST_PORT_OVERRIDE=443 ./run_docker_FL.sh orchestrator --self-signed --detach
+   ```
+
+2. **Client DGX** (exige un GPU et le driver NVIDIA) :
+   ```bash
+   SERVER_ADDRESS=10.200.241.101:443 USE_TLS=true ./run_docker_FL.sh client --self-signed --detach
+   ```
+
+Chaque lancement crée les répertoires `certs/` (si `--self-signed`) et `data/` côté client, monte les certificats, applique les variables d'environnement et démarre les conteneurs `fl-orchestrator` et `fl-client-dgx`. L'option `--detach` garde les conteneurs actifs après le script; définissez `KEEP_CONTAINER_LOGS=true` pour conserver les conteneurs une fois arrêtés.【F:run_docker_FL.sh†L14-L111】【F:run_docker_FL.sh†L112-L201】
+
+## Variables d'environnement principales
+
+### Orchestrateur (`orchestrator/.env` chargé par `run_docker_FL.sh`)
+
+- `FLOWER_SERVER_ADDRESS` (défaut `0.0.0.0`)
+- `FLOWER_SERVER_PORT` (défaut `8080`, exemple `443` en production)
+- `FLOWER_SERVERAPP_PORT` (API ServerApp optionnelle, défaut `9091`)
+- `GRPC_MAX_MESSAGE_LENGTH` (défaut 512 Mo)
+- `USE_TLS` (`true`/`false`)
+- `CA_CERT_PATH`, `SERVER_CERT_PATH`, `SERVER_KEY_PATH` (chemins montés dans le conteneur)
+- `HOST_PORT_OVERRIDE`, `HOST_SERVERAPP_PORT_OVERRIDE` (mapping des ports hôtes)
+
+### Client (`client/.env` chargé par `run_docker_FL.sh`)
+
+- `SERVER_ADDRESS` (ex. `10.200.241.101:443`)
+- `CLIENT_ID` (identifiant Flower, défaut `dgx-client`)
+- `N_LOCAL_EPOCHS`, `BATCH_SIZE`, `LEARNING_RATE` (hyperparamètres locaux)
+- `USE_TLS` (`true`/`false`)
+- `CA_CERT_PATH`, `CLIENT_CERT_PATH`, `CLIENT_KEY_PATH`
+- `DATA_DIR` (montage des données locales si nécessaire)
+
+Si un fichier `.env` est absent, le script `run_docker_FL.sh` tente de basculer vers le `.env.example` correspondant. L'option `--self-signed` force `USE_TLS=true` côté client et ajoute le SAN adéquat pour l'adresse du serveur.【F:run_docker_FL.sh†L35-L111】【F:run_docker_FL.sh†L142-L188】
+
+## Automatisation multi-hôtes (Windows ou Linux)
+
+Le script `scripts/deploy_windows_e2e.py` orchestre l'ensemble depuis une machine de pilotage :
+
+1. Vérifie ou installe **Docker** et **Git** sur chaque hôte cible (via `curl https://get.docker.com | sh` si nécessaire).【F:scripts/deploy_windows_e2e.py†L6-L56】
+2. Clone ou met à jour ce dépôt sur les hôtes (chemins par défaut `~/federated` pour l'orchestrateur, `/raid/workspace/qladane/federated` pour le DGX).【F:scripts/deploy_windows_e2e.py†L20-L33】
+3. Prépare les `.env` à partir des exemples, applique une configuration minimale de test (1 client suffisant, port gRPC configurable, TLS/mTLS activé).
+4. Construit et lance les conteneurs via `build_docker_FL.sh` et `run_docker_FL.sh`, avec certificats auto-signés optionnels.
+5. Exécute des tests : connectivité SSH, disponibilité Docker, état des conteneurs, handshake gRPC/mTLS depuis le conteneur client, extraction rapide des logs Flower.
+6. Arrête proprement les conteneurs et rappelle les commandes pour relancer manuellement.
+7. Journalise en console et dans un fichier horodaté (`deploy_YYYYMMDD_HHMMSS.log`).
+
+Commande type depuis PowerShell/Git Bash/Linux :
+
 ```bash
 python scripts/deploy_windows_e2e.py \
   --proxy-host PROXY \
@@ -91,65 +127,36 @@ python scripts/deploy_windows_e2e.py \
   --server-port 443 \
   --self-signed
 ```
-Options clés :
-- `--proxy-host` / `--dgx-host` : alias/entrées SSH.
-- `--proxy-base` / `--dgx-base` : dossiers cibles.
-- `--repo-url` : URL Git (par défaut ce dépôt).
-- `--server-port` : port gRPC exposé côté orchestrateur (443 recommandé).
-- `--self-signed` : génère un CA local + certs hub/client et les synchronise vers le DGX.
-- `--log-file` : chemin du log (défaut : `./deploy_YYYYMMDD_HHMMSS.log`).
 
-### Résultats des tests et arrêt
-Le script affiche et écrit dans le log :
-- Connexion SSH + détection/installation de Docker et Git.
-- État des conteneurs (`fl-orchestrator`, `fl-client-dgx`).
-- Résultat du handshake gRPC/mTLS (commande `grpc.channel_ready_future`).
-- Extraits des logs Flower (serveur + client).
+> Astuce : définissez la variable d'environnement `pwdsession` si vous devez fournir un mot de passe SSH non interactif ; le script utilise `sshpass` s'il est présent ou bascule sur Paramiko côté Windows.【F:scripts/deploy_windows_e2e.py†L36-L90】【F:scripts/deploy_windows_e2e.py†L92-L151】
 
-En fin d'exécution, les conteneurs sont arrêtés et un rappel indique comment relancer :
-```
-Orchestrateur : cd ~/federated/federatedlearning && ./run_docker_FL.sh orchestrator --self-signed --detach
-Client DGX   : cd /raid/workspace/qladane/federated/federatedlearning \
-               && SERVER_ADDRESS=10.200.241.101:443 ./run_docker_FL.sh client --self-signed --detach
+## Nettoyage des hôtes
+
+Pour supprimer conteneurs, images et dépôt Git sur les deux machines :
+
+```bash
+python scripts/cleanup_proxy_dgx.py \
+  --proxy-host PROXY --dgx-host DGX \
+  --proxy-base "~/federated" --dgx-base "/raid/workspace/qladane/federated"
 ```
 
-## Déploiement manuel (Linux ↔ Linux)
-1. **Build**
-   ```bash
-   ./build_docker_FL.sh all --self-signed
-   ```
-2. **Lancer l'orchestrateur**
-   ```bash
-   HOST_PORT_OVERRIDE=443 ./run_docker_FL.sh orchestrator --self-signed --detach
-   ```
-3. **Lancer le client DGX**
-   ```bash
-   SERVER_ADDRESS=10.200.241.101:443 USE_TLS=true ./run_docker_FL.sh client --self-signed --detach
-   ```
-4. **Nettoyer**
-   ```bash
-   python scripts/cleanup_proxy_dgx.py --proxy-host PROXY --dgx-host DGX \
-     --proxy-base "~/federated" --dgx-base "/raid/workspace/qladane/federated"
-   ```
+Le script arrête et supprime les conteneurs `fl-orchestrator` et `fl-client-dgx`, supprime toutes les images locales préfixées `fl-` puis efface le dossier du dépôt sur chaque hôte.【F:scripts/cleanup_proxy_dgx.py†L13-L64】
 
-## Variables d'environnement principales
-- **Orchestrateur** (`orchestrator/.env`)
-  - `FLOWER_SERVER_ADDRESS` (par défaut `0.0.0.0`)
-  - `FLOWER_SERVER_PORT` (ex : `443`)
-  - `GRPC_MAX_MESSAGE_LENGTH` (par défaut 512 Mo)
-  - `NUM_ROUNDS`, `MIN_FIT_CLIENTS`, `MIN_AVAILABLE_CLIENTS`
-  - `CA_CERT_PATH`, `SERVER_CERT_PATH`, `SERVER_KEY_PATH`
-- **Client** (`client/.env`)
-  - `SERVER_ADDRESS` (ex : `10.200.241.101:443`)
-  - `CLIENT_ID`, `N_LOCAL_EPOCHS`, `BATCH_SIZE`, `LEARNING_RATE`
-  - `USE_TLS` (true/false)
-  - `CA_CERT_PATH`, `CLIENT_CERT_PATH`, `CLIENT_KEY_PATH`
+## Relance manuelle rapide après déploiement automatisé
 
-## FAQ rapide
-- **Le script installe-t-il des paquets ?** Oui, il installe/active Docker et Git si absents sur les hôtes distants via le script officiel Docker (`get.docker.com`).
-- **Comment éviter la saisie du mot de passe ?** Utilisez `ssh-copy-id` avec le mot de passe `Melbadina18@!` une seule fois (voir section SSH) pour autoriser la clé ed25519 sans prompt.
-- **Et si le port 443 est pris ?** Ajustez `FLOWER_SERVER_PORT` et `HOST_PORT_OVERRIDE` côté orchestrateur, puis `SERVER_ADDRESS` côté client.
-- **Où trouver les logs ?** Fichier `deploy_YYYYMMDD_HHMMSS.log` (ou celui passé via `--log-file`), plus la console.
+Si vous avez utilisé `deploy_windows_e2e.py`, les conteneurs sont arrêtés en fin de test. Pour relancer sans tout reconstruire :
+
+```bash
+cd ~/federated/federatedlearning && ./run_docker_FL.sh orchestrator --self-signed --detach
+cd /raid/workspace/qladane/federated/federatedlearning && SERVER_ADDRESS=10.200.241.101:443 ./run_docker_FL.sh client --self-signed --detach
+```
+
+## Conseils TLS/mTLS
+
+- Ajoutez l'adresse ou le FQDN du hub dans `CERT_SERVER_SAN` avant de générer les certificats pour éviter les erreurs de nom d'hôte (ex. `CERT_SERVER_SAN="DNS:proxy.local,IP:10.200.241.101"`).【F:run_docker_FL.sh†L140-L180】
+- Pour activer mTLS, fournissez également `CLIENT_CERT_PATH` et `CLIENT_KEY_PATH` côté client ; le code gère automatiquement les deux signatures d'API Flower (`client_certificates` ou `certificate_chain/private_key`).【F:client/app/client.py†L164-L206】
+- En environnement de test, l'option `--self-signed` s'occupe de générer et monter les certificats côté orchestrateur et client.
 
 ## Licence
-Ce projet est fourni à titre d'exemple pour orchestrer Flower avec TLS/mTLS. Adaptez les scripts selon vos besoins internes.
+
+Projet fourni comme exemple de pipeline Flower sécurisé. Adaptez les scripts et paramètres à vos contraintes internes avant toute utilisation en production.
