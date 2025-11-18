@@ -38,7 +38,9 @@ def main() -> None:
     fleet_address = f"{server_host}:{server_port}"
     command = ["flower-superlink", "--fleet-api-address", fleet_address]
     if serverapp_port:
-        command.extend(["--serverapp-api-address", f"{server_host}:{serverapp_port}"])
+        # "flower-superlink" utilise l'option "--serverappio-api-address" pour
+        # exposer l'API ServerApp (nomenclature issue du namespace internal).
+        command.extend(["--serverappio-api-address", f"{server_host}:{serverapp_port}"])
     command.extend(build_tls_args())
 
     print("Starting Flower SuperLink with:", " ".join(shlex.quote(part) for part in command))
