@@ -621,7 +621,7 @@ SERVER_KEY_PATH=/certs/server.key
             f"printf %s {quote(content)} > orchestrator/.env"
         )
     else:
-        content = f"""SERVER_ADDRESS={server_host}:{server_app_port}
+        content = f"""SERVER_ADDRESS={server_host}:{server_port}
 CLIENT_ID=dgx-client
 N_LOCAL_EPOCHS=1
 BATCH_SIZE=64
