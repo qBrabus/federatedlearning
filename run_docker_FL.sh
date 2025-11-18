@@ -72,6 +72,8 @@ case "$COMPONENT" in
     source "$ORCH_ENV_FILE"
     set +a
     HOST_PORT=${HOST_PORT_OVERRIDE:-$FLOWER_SERVER_PORT}
+    SERVERAPP_PORT=${FLOWER_SERVERAPP_PORT:-9091}
+    HOST_SERVERAPP_PORT=${HOST_SERVERAPP_PORT_OVERRIDE:-$SERVERAPP_PORT}
 
     DOCKER_DETACH_FLAG=""
     if [[ "$DETACH" == "true" ]]; then
@@ -85,6 +87,7 @@ case "$COMPONENT" in
       -e SERVER_CERT_PATH=${SERVER_CERT_PATH:-/certs/server.crt} \
       -e SERVER_KEY_PATH=${SERVER_KEY_PATH:-/certs/server.key} \
       -p "${HOST_PORT}:${FLOWER_SERVER_PORT}" \
+      -p "${HOST_SERVERAPP_PORT}:${SERVERAPP_PORT}" \
       -v "$CERTS_DIR:/certs:ro" \
       fl-orchestrator:latest
     ;;

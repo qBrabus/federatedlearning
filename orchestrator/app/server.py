@@ -33,9 +33,12 @@ def main() -> None:
 
     server_host = os.getenv("FLOWER_SERVER_ADDRESS", "0.0.0.0")
     server_port = os.getenv("FLOWER_SERVER_PORT", "8080")
+    serverapp_port = os.getenv("FLOWER_SERVERAPP_PORT")
 
     fleet_address = f"{server_host}:{server_port}"
     command = ["flower-superlink", "--fleet-api-address", fleet_address]
+    if serverapp_port:
+        command.extend(["--serverapp-api-address", f"{server_host}:{serverapp_port}"])
     command.extend(build_tls_args())
 
     print("Starting Flower SuperLink with:", " ".join(shlex.quote(part) for part in command))

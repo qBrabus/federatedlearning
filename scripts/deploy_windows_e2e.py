@@ -39,6 +39,7 @@ DEFAULT_PROXY_BASE = "~/federated"
 DEFAULT_DGX_BASE = "/raid/workspace/qladane/federated"
 DEFAULT_REPO_NAME = "federatedlearning"
 DEFAULT_SERVER_PORT = 443
+DEFAULT_SERVER_APP_PORT = 9091
 
 LOG_FORMAT_FILE = "%(asctime)s | %(levelname)-8s | %(message)s"
 LOG_FORMAT_CONSOLE = "%(levelname)-8s | %(message)s"
@@ -219,7 +220,9 @@ def info(logger: logging.Logger, msg: str, *args) -> None:
     logger.info(msg, *args)
 
 
-def run_command(command: list[str], logger: logging.Logger, label: str) -> None:
+def run_command(
+    command: list[str], logger: logging.Logger, label: str, *, mark_as_test: bool = False
+) -> None:
     quoted = " ".join(shlex.quote(part) for part in command)
     logger.debug("[%s] %s", label, quoted)
 
@@ -235,14 +238,16 @@ def run_command(command: list[str], logger: logging.Logger, label: str) -> None:
 
     assert process.stdout is not None
     for line in process.stdout:
-        logger.info("[%s] %s", label, line.rstrip())
+        logger.info("[%s] %s", label, line.rstrip(), extra={"is_test": mark_as_test})
 
     process.wait()
     if process.returncode:
         raise subprocess.CalledProcessError(process.returncode, command)
 
 
-def run_command_capture(command: list[str], logger: logging.Logger, label: str) -> str:
+def run_command_capture(
+    command: list[str], logger: logging.Logger, label: str, *, mark_as_test: bool = False
+) -> str:
     """Exécute une commande et retourne la sortie standard."""
 
     quoted = " ".join(shlex.quote(part) for part in command)
@@ -259,11 +264,11 @@ def run_command_capture(command: list[str], logger: logging.Logger, label: str) 
 
     if result.stdout:
         for line in result.stdout.splitlines():
-            logger.info("[%s] %s", label, line)
+            logger.info("[%s] %s", label, line, extra={"is_test": mark_as_test})
 
     if result.stderr:
         for line in result.stderr.splitlines():
-            logger.info("[%s] %s", label, line)
+            logger.info("[%s] %s", label, line, extra={"is_test": mark_as_test})
 
     if result.returncode:
         raise subprocess.CalledProcessError(
@@ -311,7 +316,12 @@ def _scp_paramiko(source: str, destination: str, logger: logging.Logger, label: 
 
 
 def _run_paramiko_command(
-    host: str, command: str, logger: logging.Logger, label: str, capture: bool = False
+    host: str,
+    command: str,
+    logger: logging.Logger,
+    label: str,
+    capture: bool = False,
+    mark_as_test: bool = False,
 ) -> str:
     from io import StringIO
 
@@ -330,20 +340,20 @@ def _run_paramiko_command(
                 if stdout_data:
                     output_buf.write(stdout_data)
                     for line in stdout_data.splitlines():
-                        logger.info("[%s] %s", label, line)
+                        logger.info("[%s] %s", label, line, extra={"is_test": mark_as_test})
                 if stderr_data:
                     err_buf.write(stderr_data)
                     for line in stderr_data.splitlines():
-                        logger.info("[%s] %s", label, line)
+                        logger.info("[%s] %s", label, line, extra={"is_test": mark_as_test})
             else:
                 for line in stdout:
                     decoded = line.rstrip("\n")
                     output_buf.write(decoded + "\n")
-                    logger.info("[%s] %s", label, decoded)
+                    logger.info("[%s] %s", label, decoded, extra={"is_test": mark_as_test})
                 for line in stderr:
                     decoded = line.rstrip("\n")
                     err_buf.write(decoded + "\n")
-                    logger.info("[%s] %s", label, decoded)
+                    logger.info("[%s] %s", label, decoded, extra={"is_test": mark_as_test})
         except socket.timeout:
             # Si aucune sortie n'est émise (ex: docker stop silencieux),
             # on ne considère pas cela comme un échec tant que la commande
@@ -414,35 +424,74 @@ fi
     ssh(host, remote_cmd, logger, label=f"prereqs {host}")
 
 
-def ssh(host: str, command: str, logger: logging.Logger, label: str | None = None) -> None:
+def ssh(
+    host: str,
+    command: str,
+    logger: logging.Logger,
+    label: str | None = None,
+    *,
+    mark_as_test: bool = False,
+) -> None:
     if _use_paramiko:
-        _run_paramiko_command(host, command, logger, label or f"ssh {host}")
+        _run_paramiko_command(
+            host,
+            command,
+            logger,
+            label or f"ssh {host}",
+            mark_as_test=mark_as_test,
+        )
     else:
         run_command(
             [*_ssh_prefix(logger, "ssh"), host, f"set -euo pipefail; {command}"],
             logger,
             label or f"ssh {host}",
+            mark_as_test=mark_as_test,
         )
 
 
 def ssh_capture(
-    host: str, command: str, logger: logging.Logger, label: str | None = None
+    host: str,
+    command: str,
+    logger: logging.Logger,
+    label: str | None = None,
+    *,
+    mark_as_test: bool = False,
 ) -> str:
     if _use_paramiko:
-        return _run_paramiko_command(host, command, logger, label or f"ssh {host}", capture=True)
+        return _run_paramiko_command(
+            host,
+            command,
+            logger,
+            label or f"ssh {host}",
+            capture=True,
+            mark_as_test=mark_as_test,
+        )
 
     return run_command_capture(
         [*_ssh_prefix(logger, "ssh"), host, f"set -euo pipefail; {command}"],
         logger,
         label or f"ssh {host}",
+        mark_as_test=mark_as_test,
     )
 
 
-def scp(source: str, destination: str, logger: logging.Logger, label: str = "scp") -> None:
+def scp(
+    source: str,
+    destination: str,
+    logger: logging.Logger,
+    label: str = "scp",
+    *,
+    mark_as_test: bool = False,
+) -> None:
     if _use_paramiko:
         _scp_paramiko(source, destination, logger, label)
     else:
-        run_command([*_ssh_prefix(logger, "scp"), "-r", source, destination], logger, label)
+        run_command(
+            [*_ssh_prefix(logger, "scp"), "-r", source, destination],
+            logger,
+            label,
+            mark_as_test=mark_as_test,
+        )
 
 
 def quote(value: str) -> str:
@@ -540,12 +589,24 @@ def ensure_env(host: str, base_dir: str, repo_name: str, env_file: str, example_
     ssh(host, remote_cmd, logger)
 
 
-def write_test_env(host: str, base_dir: str, repo_name: str, component: str, server_port: int, logger: logging.Logger) -> None:
+def write_test_env(
+    host: str,
+    base_dir: str,
+    repo_name: str,
+    component: str,
+    server_port: int,
+    logger: logging.Logger,
+    *,
+    server_app_port: int = DEFAULT_SERVER_APP_PORT,
+    server_host: str = "127.0.0.1",
+) -> None:
     """Force des valeurs compatibles avec un test 1 client / mTLS."""
 
     if component == "orchestrator":
         content = f"""FLOWER_SERVER_ADDRESS=0.0.0.0
 FLOWER_SERVER_PORT={server_port}
+FLOWER_SERVERAPP_PORT={server_app_port}
+HOST_SERVERAPP_PORT_OVERRIDE={server_app_port}
 GRPC_MAX_MESSAGE_LENGTH=536870912
 NUM_ROUNDS=1
 MIN_FIT_CLIENTS=1
@@ -559,7 +620,7 @@ SERVER_KEY_PATH=/certs/server.key
             f"printf %s {quote(content)} > orchestrator/.env"
         )
     else:
-        content = f"""SERVER_ADDRESS=10.200.241.101:{server_port}
+        content = f"""SERVER_ADDRESS={server_host}:{server_app_port}
 CLIENT_ID=dgx-client
 N_LOCAL_EPOCHS=1
 BATCH_SIZE=64
@@ -805,12 +866,14 @@ def check_containers(host: str, logger: logging.Logger) -> None:
         "docker ps --format 'table {{.Names}}\t{{.Status}}\t{{.Ports}}'",
         logger,
         label=f"docker-ps {host}",
+        mark_as_test=True,
     )
     ssh(
         host,
         "docker ps -a --format 'table {{.Names}}\t{{.CreatedAt}}\t{{.Status}}'",
         logger,
         label=f"docker-history {host}",
+        mark_as_test=True,
     )
 
 
@@ -850,7 +913,7 @@ def verify_certificates(host: str, base_dir: str, repo_name: str, logger: loggin
     )
 
     info(logger, "[%s] vérification détaillée des certificats/SAN", host)
-    ssh(host, remote_cmd, logger, label="cert-audit")
+    ssh(host, remote_cmd, logger, label="cert-audit", mark_as_test=True)
 
 
 def hub_client_link_diagnostics(
@@ -895,7 +958,7 @@ def hub_client_link_diagnostics(
     )
 
     info(logger, "[%s] diagnostics réseau hub <> client", dgx_host)
-    ssh(dgx_host, remote_cmd, logger, label="link-check")
+    ssh(dgx_host, remote_cmd, logger, label="link-check", mark_as_test=True)
 
 
 def grpc_smoke_test(host: str, base_dir: str, repo_name: str, logger: logging.Logger) -> None:
@@ -909,6 +972,8 @@ def grpc_smoke_test(host: str, base_dir: str, repo_name: str, logger: logging.Lo
 
     payload = r'''
 import os, grpc
+from grpc_health.v1 import health_pb2, health_pb2_grpc
+
 addr = os.environ.get("SERVER_ADDRESS", "127.0.0.1:8080")
 use_tls = os.environ.get("USE_TLS", "true").lower() in {"1", "true", "yes"}
 ca = os.environ.get("CA_CERT_PATH", "/certs/ca.crt")
@@ -939,6 +1004,13 @@ grpc.channel_ready_future(channel).result(timeout=10)
 state = channel._channel.check_connectivity_state(True)  # pragma: no cover - introspection
 print("[grpc] channel ready ->", addr, "state:", state)
 print("[grpc] cible effective:", channel._channel.target().decode())
+
+stub = health_pb2_grpc.HealthStub(channel)
+try:
+    response = stub.Check(health_pb2.HealthCheckRequest(service=""), timeout=5)
+    print("[grpc] health status:", health_pb2.HealthCheckResponse.ServingStatus.Name(response.status))
+except Exception as exc:  # pragma: no cover - diagnostic
+    print("[grpc] échec health-check:", type(exc).__name__, exc)
 '''
     test_log(logger, "[%s] test gRPC/mTLS (hub <> client)", host)
 
@@ -955,7 +1027,7 @@ print("[grpc] cible effective:", channel._channel.target().decode())
         f"{payload}\n"
         "PY"
     )
-    ssh(host, remote_cmd, logger, label="grpc-test")
+    ssh(host, remote_cmd, logger, label="grpc-test", mark_as_test=True)
 
 
 def simulate_training_round(host: str, base_dir: str, repo_name: str, logger: logging.Logger) -> None:
@@ -970,6 +1042,7 @@ def simulate_training_round(host: str, base_dir: str, repo_name: str, logger: lo
 
     payload = r'''
 import os
+import grpc
 from pathlib import Path
 
 import flwr as fl
@@ -1017,7 +1090,16 @@ print("[round] TLS activé:", bool(tls_kwargs))
 if tls_kwargs:
     print("[round] certificats fournis:", "client_certificates" in tls_kwargs)
 
-fl.client.start_client(server_address=addr, client=client.to_client(), **tls_kwargs)
+try:
+    fl.client.start_client(server_address=addr, client=client.to_client(), **tls_kwargs)
+except grpc.RpcError as exc:  # pragma: no cover - diagnostic
+    print("[round] RPC échouée:", exc)
+    if exc.code() == grpc.StatusCode.UNIMPLEMENTED:
+        print(
+            "[round] Méthode gRPC inconnue : vérifiez que SERVER_ADDRESS pointe vers le port ServerApp (ex: 9091)"
+        )
+    raise
+
 print("[round] entraînement éphémère terminé")
 '''
 
@@ -1035,7 +1117,7 @@ print("[round] entraînement éphémère terminé")
         "PY"
     )
     test_log(logger, "[%s] test d'entraînement éphémère", host)
-    ssh(host, remote_cmd, logger, label="round-test")
+    ssh(host, remote_cmd, logger, label="round-test", mark_as_test=True)
 
 
 def tail_logs(host: str, container: str, logger: logging.Logger, lines: int = 20) -> None:
@@ -1049,6 +1131,7 @@ def tail_logs(host: str, container: str, logger: logging.Logger, lines: int = 20
             f"docker logs --tail {lines} {quote(container)}",
             logger,
             label=f"logs {container}",
+            mark_as_test=True,
         )
     except subprocess.CalledProcessError:
         info(
@@ -1112,8 +1195,26 @@ def main() -> None:
         # 2) .env et valeurs de test minimalistes
         ensure_env(args.proxy_host, proxy_base, repo_name, "orchestrator/.env", "orchestrator/.env.example", logger)
         ensure_env(args.dgx_host, dgx_base, repo_name, "client/.env", "client/.env.example", logger)
-        write_test_env(args.proxy_host, proxy_base, repo_name, "orchestrator", server_port, logger)
-        write_test_env(args.dgx_host, dgx_base, repo_name, "client", server_port, logger)
+        server_app_port = find_available_port(args.proxy_host, DEFAULT_SERVER_APP_PORT, logger)
+        write_test_env(
+            args.proxy_host,
+            proxy_base,
+            repo_name,
+            "orchestrator",
+            server_port,
+            logger,
+            server_app_port=server_app_port,
+        )
+        write_test_env(
+            args.dgx_host,
+            dgx_base,
+            repo_name,
+            "client",
+            server_port,
+            logger,
+            server_app_port=server_app_port,
+            server_host=args.proxy_host,
+        )
 
         # 3) Build + run
         build_and_run(args.proxy_host, proxy_base, repo_name, "orchestrator", logger, args.self_signed)
@@ -1152,12 +1253,13 @@ def main() -> None:
         logger,
         "Déploiement validé. Pour relancer manuellement:\n"
         "  Orchestrateur: cd %s/%s && ./run_docker_FL.sh orchestrator --self-signed --detach\n"
-        "  Client DGX:    cd %s/%s && SERVER_ADDRESS=10.200.241.101:%s ./run_docker_FL.sh client --self-signed --detach",
+        "  Client DGX:    cd %s/%s && SERVER_ADDRESS=%s:%s ./run_docker_FL.sh client --self-signed --detach",
         proxy_base,
         repo_name,
         dgx_base,
         repo_name,
-        server_port,
+        args.proxy_host,
+        server_app_port,
     )
 
 
