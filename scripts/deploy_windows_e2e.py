@@ -236,9 +236,16 @@ def build_remote_repo_path(base_dir: str, repo_name: str) -> str:
 
 
 def scp_quote_remote(path: str) -> str:
-    """Double-quote un chemin pour scp en laissant $HOME s'étendre."""
+    """Prépare un chemin distant pour ``scp``.
 
-    return f'"{path}"'
+    ``run_command`` invoque ``scp`` sans passer par un shell, il ne faut donc
+    pas entourer le chemin de guillemets (ils seraient transmis littéralement
+    et ``scp`` chercherait un fichier nommé """"/path"""").
+    On retourne le chemin tel quel pour conserver les espaces éventuels dans le
+    même argument.
+    """
+
+    return path
 
 
 def resolve_remote_path(host: str, path: str, logger: logging.Logger) -> str:
