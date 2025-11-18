@@ -889,6 +889,22 @@ def container_exists(host: str, container: str, logger: logging.Logger) -> bool:
     return "present" in output
 
 
+def assert_container_running(host: str, container: str, logger: logging.Logger) -> None:
+    """Vérifie que le conteneur est démarré avant d'enchaîner les tests."""
+
+    status_cmd = (
+        "state=$(docker inspect -f '{{.State.Status}}' "
+        f"{quote(container)} 2>/dev/null || true); echo $state"
+    )
+
+    status = ssh_capture(host, status_cmd, logger, label="container-state").strip()
+    if status != "running":
+        tail_logs(host, container, logger)
+        raise RuntimeError(
+            f"[{host}] conteneur {container} indisponible (état: {status or 'inconnu'})"
+        )
+
+
 def verify_certificates(host: str, base_dir: str, repo_name: str, logger: logging.Logger) -> None:
     """Inspecte en détail CA/serveur/client pour vérifier le SAN et la validité."""
 
@@ -1225,6 +1241,7 @@ def main() -> None:
 
         # 3) Build + run
         build_and_run(args.proxy_host, proxy_base, repo_name, "orchestrator", logger, args.self_signed)
+        assert_container_running(args.proxy_host, "fl-orchestrator", logger)
         if args.self_signed:
             sync_self_signed_ca(
                 proxy_host=args.proxy_host,
@@ -1235,6 +1252,7 @@ def main() -> None:
                 logger=logger,
             )
         build_and_run(args.dgx_host, dgx_base, repo_name, "client", logger, args.self_signed)
+        assert_container_running(args.dgx_host, "fl-client-dgx", logger)
 
         # 4) Tests
         check_docker(args.proxy_host, logger)
