@@ -24,7 +24,7 @@ DAYS=365
 # Permettre la personnalisation via des variables d'environnement pour éviter
 # les erreurs de validation lors de connexions inter-machines (ex: IP publique
 # ou FQDN différent de localhost).
-SERVER_SAN="${CERT_SERVER_SAN:-DNS:localhost,IP:127.0.0.1}"
+SERVER_SAN="${CERT_SERVER_SAN:-DNS:fl-orchestrator.local,DNS:localhost,IP:127.0.0.1}"
 CLIENT_SAN="${CERT_CLIENT_SAN:-DNS:fl-client.local}"
 
 append_host_ips_to_san() {
