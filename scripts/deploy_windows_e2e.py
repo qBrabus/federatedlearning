@@ -100,6 +100,37 @@ def run_command(command: list[str], logger: logging.Logger, label: str) -> None:
         raise subprocess.CalledProcessError(process.returncode, command)
 
 
+def run_command_capture(command: list[str], logger: logging.Logger, label: str) -> str:
+    """Exécute une commande et retourne la sortie standard."""
+
+    quoted = " ".join(shlex.quote(part) for part in command)
+    logger.debug("[%s] %s", label, quoted)
+
+    result = subprocess.run(
+        command,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        check=False,
+    )
+
+    if result.stdout:
+        for line in result.stdout.splitlines():
+            logger.info("[%s] %s", label, line)
+
+    if result.stderr:
+        for line in result.stderr.splitlines():
+            logger.info("[%s] %s", label, line)
+
+    if result.returncode:
+        raise subprocess.CalledProcessError(
+            result.returncode, command, output=result.stdout, stderr=result.stderr
+        )
+
+    return result.stdout
+
+
 def ensure_prerequisites(host: str, logger: logging.Logger) -> None:
     """Installe Git/Docker si absents et démarre Docker.
 
@@ -159,6 +190,14 @@ fi
 
 def ssh(host: str, command: str, logger: logging.Logger, label: str | None = None) -> None:
     run_command(["ssh", host, f"set -euo pipefail; {command}"], logger, label or f"ssh {host}")
+
+
+def ssh_capture(
+    host: str, command: str, logger: logging.Logger, label: str | None = None
+) -> str:
+    return run_command_capture(
+        ["ssh", host, f"set -euo pipefail; {command}"], logger, label or f"ssh {host}"
+    )
 
 
 def scp(source: str, destination: str, logger: logging.Logger, label: str = "scp") -> None:
@@ -231,6 +270,73 @@ CLIENT_KEY_PATH=/certs/client.key
 
     info(logger, "[%s] écriture .env de test (%s)", host, component)
     ssh(host, remote_cmd, logger)
+
+
+def find_available_port(host: str, requested_port: int, logger: logging.Logger) -> int:
+    """Retourne un port TCP disponible sur l'hôte cible.
+
+    Le port demandé est privilégié. En cas d'indisponibilité, on cherche le
+    prochain port libre dans une petite fenêtre (50 ports) afin d'éviter les
+    conflits, notamment avec des services déjà liés à 443.
+    """
+
+    info(logger, "[%s] vérification du port %s", host, requested_port)
+    remote_cmd = rf"""
+python_cmd=$(command -v python3 || command -v python || true)
+if [ -z "$python_cmd" ]; then
+  echo "Python est requis pour détecter les ports libres" >&2
+  exit 1
+fi
+
+"$python_cmd" - <<'PY'
+import errno
+import socket
+import sys
+
+preferred = {requested_port}
+max_port = preferred + 50
+
+def is_free(port: int) -> bool:
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        try:
+            s.bind(("0.0.0.0", port))
+        except OSError as exc:  # port in use or privilégie
+            if exc.errno in (errno.EACCES, errno.EADDRINUSE, errno.EADDRNOTAVAIL):
+                return False
+            return False
+    return True
+
+
+chosen = None
+for port in range(preferred, max_port + 1):
+    if is_free(port):
+        chosen = port
+        break
+
+if chosen is None:
+    sys.exit("Aucun port libre trouvé")
+
+print(chosen)
+PY
+"""
+
+    output = ssh_capture(host, remote_cmd, logger, label="port-check")
+    try:
+        available = int(output.strip().splitlines()[-1])
+    except (ValueError, IndexError) as exc:  # noqa: BLE001
+        raise RuntimeError(f"Port non détecté sur {host}: {output!r}") from exc
+
+    if available != requested_port:
+        info(
+            logger,
+            "[%s] port %s occupé, utilisation du port %s",
+            host,
+            requested_port,
+            available,
+        )
+
+    return available
 
 
 def build_and_run(host: str, base_dir: str, repo_name: str, component: str, logger: logging.Logger, self_signed: bool) -> None:
@@ -311,6 +417,9 @@ def main() -> None:
     info(logger, "Journal détaillé : %s", log_file)
 
     try:
+        # 0bis) Sélection du port serveur (évite les conflits sur 443)
+        server_port = find_available_port(args.proxy_host, args.server_port, logger)
+
         # 0) Prérequis (Git + Docker)
         ensure_prerequisites(args.proxy_host, logger)
         ensure_prerequisites(args.dgx_host, logger)
@@ -322,8 +431,8 @@ def main() -> None:
         # 2) .env et valeurs de test minimalistes
         ensure_env(args.proxy_host, args.proxy_base, repo_name, "orchestrator/.env", "orchestrator/.env.example", logger)
         ensure_env(args.dgx_host, args.dgx_base, repo_name, "client/.env", "client/.env.example", logger)
-        write_test_env(args.proxy_host, args.proxy_base, repo_name, "orchestrator", args.server_port, logger)
-        write_test_env(args.dgx_host, args.dgx_base, repo_name, "client", args.server_port, logger)
+        write_test_env(args.proxy_host, args.proxy_base, repo_name, "orchestrator", server_port, logger)
+        write_test_env(args.dgx_host, args.dgx_base, repo_name, "client", server_port, logger)
 
         # 3) Build + run
         build_and_run(args.proxy_host, args.proxy_base, repo_name, "orchestrator", logger, args.self_signed)
@@ -355,7 +464,7 @@ def main() -> None:
         repo_name,
         args.dgx_base,
         repo_name,
-        args.server_port,
+        server_port,
     )
 
 
