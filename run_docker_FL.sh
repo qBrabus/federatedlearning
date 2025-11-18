@@ -103,7 +103,7 @@ case "$COMPONENT" in
         set +a
       fi
 
-      SERVER_SAN="${CERT_SERVER_SAN:-DNS:localhost,IP:127.0.0.1}"
+      SERVER_SAN="${CERT_SERVER_SAN:-DNS:fl-orchestrator.local,DNS:localhost,IP:127.0.0.1}"
       if [[ -n "${SERVER_ADDRESS:-}" ]]; then
         server_host="${SERVER_ADDRESS%%:*}"
         if [[ "$server_host" =~ ^[0-9]+(\.[0-9]+){3}$ ]]; then

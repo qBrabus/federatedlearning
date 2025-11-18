@@ -171,7 +171,7 @@ def _ssh_prefix(logger: logging.Logger, tool: str) -> list[str]:
 class _ColorFormatter(logging.Formatter):
     COLORS = {
         logging.DEBUG: "\033[36m",  # Cyan
-        logging.INFO: "\033[32m",  # Green
+        logging.INFO: "\033[94m",  # Light blue for runtime/tests
         logging.WARNING: "\033[33m",  # Yellow
         logging.ERROR: "\033[31m",  # Red
         logging.CRITICAL: "\033[35m",  # Magenta
@@ -778,10 +778,27 @@ def build_and_run(host: str, base_dir: str, repo_name: str, component: str, logg
 
 def check_docker(host: str, logger: logging.Logger) -> None:
     ssh(host, "docker --version", logger, label=f"docker {host}")
+    ssh(
+        host,
+        "docker info --format 'Engine: {{.ServerVersion}} | Storage: {{.Driver}} | Root: {{.DockerRootDir}}'",
+        logger,
+        label=f"docker-info {host}",
+    )
 
 
 def check_containers(host: str, logger: logging.Logger) -> None:
-    ssh(host, "docker ps --format 'table {{.Names}}\t{{.Status}}'", logger, label=f"docker-ps {host}")
+    ssh(
+        host,
+        "docker ps --format 'table {{.Names}}\t{{.Status}}\t{{.Ports}}'",
+        logger,
+        label=f"docker-ps {host}",
+    )
+    ssh(
+        host,
+        "docker ps -a --format 'table {{.Names}}\t{{.CreatedAt}}\t{{.Status}}'",
+        logger,
+        label=f"docker-history {host}",
+    )
 
 
 def container_exists(host: str, container: str, logger: logging.Logger) -> bool:
@@ -795,6 +812,34 @@ def container_exists(host: str, container: str, logger: logging.Logger) -> bool:
     return "present" in output
 
 
+def verify_certificates(host: str, base_dir: str, repo_name: str, logger: logging.Logger) -> None:
+    """Inspecte en détail CA/serveur/client pour vérifier le SAN et la validité."""
+
+    remote_cmd = (
+        f"cd {quote_path(base_dir)}/{quote(repo_name)} && "
+        "ca=$(pwd)/certs/ca.crt; "
+        "server=$(pwd)/certs/orchestrator/server.crt; "
+        "client=$(pwd)/certs/client/client.crt; "
+        "envfile=$(pwd)/client/.env; "
+        "set -a; [ -f $envfile ] && . $envfile; set +a; "
+        "server_host=${SERVER_ADDRESS%%:*}; server_port=${SERVER_ADDRESS##*:}; "
+        "echo '[cert] CA fingerprint:' && openssl x509 -noout -fingerprint -sha256 -in "$ca"; "
+        "echo '[cert] serveur:' && openssl x509 -noout -subject -issuer -dates -in "$server"; "
+        "echo '[cert] serveur SAN:' && openssl x509 -noout -ext subjectAltName -in "$server"; "
+        "echo '[cert] client:' && openssl x509 -noout -subject -issuer -dates -in "$client"; "
+        "echo '[cert] client SAN:' && openssl x509 -noout -ext subjectAltName -in "$client"; "
+        "if command -v openssl >/dev/null 2>&1; then "
+        "  echo '[cert] vérification SAN attendu:' $server_host; "
+        "  openssl x509 -in "$server" -noout -ext subjectAltName | grep -E "DNS:${server_host}|IP Address:${server_host}" || true; "
+        "fi; "
+        "echo '[cert] connexion testée via openssl s_client:'; "
+        "openssl s_client -connect \"$server_host:$server_port\" -CAfile \"$ca\" -servername \"$server_host\" -verify_return_error -brief </dev/null || true"
+    )
+
+    info(logger, "[%s] vérification détaillée des certificats/SAN", host)
+    ssh(host, remote_cmd, logger, label="cert-audit")
+
+
 def hub_client_link_diagnostics(
     dgx_host: str, base_dir: str, repo_name: str, logger: logging.Logger
 ) -> None:
@@ -806,6 +851,17 @@ def hub_client_link_diagnostics(
         "server_host=${SERVER_ADDRESS%%:*}; server_port=${SERVER_ADDRESS##*:}; "
         "ca_file=$(pwd)/certs/ca.crt; "
         "echo '[link] cible:' $server_host:$server_port; "
+        "python - <<'PY'\n"
+        "import socket, os\n"
+        "target = os.environ.get('SERVER_ADDRESS', '127.0.0.1:8080')\n"
+        "host, port = target.rsplit(':', 1)\n"
+        "try:\n"
+        "    infos = socket.getaddrinfo(host, int(port))\n"
+        "    unique = sorted({f"{i[4][0]} ({i[0].name})" for i in infos})\n"
+        "    print('[link] résolutions DNS:', ', '.join(unique))\n"
+        "except Exception as exc:  # pragma: no cover - diagnostic\n"
+        "    print('[link] échec résolution DNS:', exc)\n"
+        "PY\n"
         "ping -c 2 -W 2 $server_host || true; "
         "pybin=$(command -v python3 || command -v python || echo python); "
         "$pybin - <<'PY'\n"
@@ -819,7 +875,7 @@ def hub_client_link_diagnostics(
         "if command -v openssl >/dev/null 2>&1; then "
         "  echo '[link] vérification TLS openssl'; "
         "  openssl s_client -connect \"$server_host:$server_port\" -CAfile \"$ca_file\" "
-        "-servername fl-orchestrator.local -verify_return_error -brief </dev/null || true; "
+        "-servername \"$server_host\" -verify_return_error -brief </dev/null || true; "
         "fi"
     )
 
@@ -867,6 +923,7 @@ else:
 grpc.channel_ready_future(channel).result(timeout=10)
 state = channel._channel.check_connectivity_state(True)  # pragma: no cover - introspection
 print("[grpc] channel ready ->", addr, "state:", state)
+print("[grpc] cible effective:", channel._channel.target().decode())
 '''
     info(logger, "[%s] test gRPC/mTLS (hub <> client)", host)
 
@@ -1061,6 +1118,7 @@ def main() -> None:
         check_docker(args.dgx_host, logger)
         check_containers(args.proxy_host, logger)
         check_containers(args.dgx_host, logger)
+        verify_certificates(args.dgx_host, dgx_base, repo_name, logger)
         hub_client_link_diagnostics(args.dgx_host, dgx_base, repo_name, logger)
         grpc_smoke_test(args.dgx_host, dgx_base, repo_name, logger)
         simulate_training_round(args.dgx_host, dgx_base, repo_name, logger)
