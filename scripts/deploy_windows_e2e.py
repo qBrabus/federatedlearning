@@ -208,6 +208,24 @@ def quote(value: str) -> str:
     return shlex.quote(value)
 
 
+def normalize_remote_path(path: str) -> str:
+    """Évite le tilde littéral en SSH en le remplaçant par $HOME."""
+
+    if path == "~":
+        return "$HOME"
+    if path.startswith("~/"):
+        return f"$HOME/{path[2:]}"
+    return path
+
+
+def quote_path(path: str) -> str:
+    """Quote un chemin tout en autorisant l'expansion de $HOME."""
+
+    if path.startswith("$HOME"):
+        return f'"{path}"'
+    return shlex.quote(path)
+
+
 def repo_name_from_url(url: str) -> str:
     segment = url.rstrip("/").split("/")[-1]
     return segment[:-4] if segment.endswith(".git") else segment or DEFAULT_REPO_NAME
@@ -215,7 +233,7 @@ def repo_name_from_url(url: str) -> str:
 
 def clone_or_pull(host: str, base_dir: str, repo_url: str, repo_name: str, logger: logging.Logger) -> None:
     remote_cmd = (
-        f"mkdir -p {quote(base_dir)} && cd {quote(base_dir)} && "
+        f"mkdir -p {quote_path(base_dir)} && cd {quote_path(base_dir)} && "
         f"if [ -d {quote(repo_name)}/.git ]; then "
         f"git -C {quote(repo_name)} fetch --all --tags && "
         f"git -C {quote(repo_name)} pull --ff-only; "
@@ -227,7 +245,7 @@ def clone_or_pull(host: str, base_dir: str, repo_url: str, repo_name: str, logge
 
 def ensure_env(host: str, base_dir: str, repo_name: str, env_file: str, example_file: str, logger: logging.Logger) -> None:
     remote_cmd = (
-        f"cd {quote(base_dir)}/{quote(repo_name)} && "
+        f"cd {quote_path(base_dir)}/{quote(repo_name)} && "
         f"if [ ! -f {quote(env_file)} ]; then cp -f {quote(example_file)} {quote(env_file)}; fi"
     )
     info(logger, "[%s] vérification de %s", host, env_file)
@@ -249,7 +267,7 @@ SERVER_CERT_PATH=/certs/server.crt
 SERVER_KEY_PATH=/certs/server.key
 """
         remote_cmd = (
-            f"cd {quote(base_dir)}/{quote(repo_name)} && "
+            f"cd {quote_path(base_dir)}/{quote(repo_name)} && "
             f"printf %s {quote(content)} > orchestrator/.env"
         )
     else:
@@ -264,7 +282,7 @@ CLIENT_CERT_PATH=/certs/client.crt
 CLIENT_KEY_PATH=/certs/client.key
 """
         remote_cmd = (
-            f"cd {quote(base_dir)}/{quote(repo_name)} && "
+            f"cd {quote_path(base_dir)}/{quote(repo_name)} && "
             f"printf %s {quote(content)} > client/.env"
         )
 
@@ -355,7 +373,7 @@ PY
 def build_and_run(host: str, base_dir: str, repo_name: str, component: str, logger: logging.Logger, self_signed: bool) -> None:
     flags = "--self-signed" if self_signed else ""
     remote_cmd = (
-        f"cd {quote(base_dir)}/{quote(repo_name)} && "
+        f"cd {quote_path(base_dir)}/{quote(repo_name)} && "
         f"./build_docker_FL.sh {component} {flags} && "
         f"./run_docker_FL.sh {component} {flags} --detach"
     )
@@ -401,7 +419,7 @@ grpc.channel_ready_future(channel).result(timeout=10)
 print("gRPC channel ready ->", addr)
 '''
     remote_cmd = (
-        f"cd {quote(base_dir)}/{quote(repo_name)} && "
+        f"cd {quote_path(base_dir)}/{quote(repo_name)} && "
         "docker run --rm "
         "--env-file client/.env "
         "-e USE_TLS=${USE_TLS:-true} "
@@ -414,6 +432,78 @@ print("gRPC channel ready ->", addr)
         "PY"
     )
     ssh(host, remote_cmd, logger, label="grpc-test")
+
+
+def simulate_training_round(host: str, base_dir: str, repo_name: str, logger: logging.Logger) -> None:
+    """Démarre un client éphémère qui entraîne/évalue et renvoie des poids.
+
+    On s'appuie sur le serveur Flower déjà lancé dans le conteneur orchestrateur.
+    Le client est volontairement minimal : il envoie des poids nuls, reçoit ceux
+    du serveur, applique un fit (poids = 1), puis renvoie ces paramètres. Cela
+    valide le chemin complet : connexion TLS/mTLS, fit, evaluate et retour des
+    poids agrégés par l'orchestrateur.
+    """
+
+    payload = r'''
+import os
+from pathlib import Path
+
+import flwr as fl
+import numpy as np
+
+addr = os.environ["SERVER_ADDRESS"]
+use_tls = os.environ.get("USE_TLS", "true").lower() in {"1", "true", "yes"}
+ca = os.environ.get("CA_CERT_PATH")
+cert = os.environ.get("CLIENT_CERT_PATH")
+key = os.environ.get("CLIENT_KEY_PATH")
+
+
+class EphemeralClient(fl.client.NumPyClient):
+    def get_parameters(self, config):
+        return [np.zeros((4,), dtype=np.float32)]
+
+    def fit(self, parameters, config):
+        # renvoie un vecteur de poids non nuls pour vérifier le round
+        updated = [np.ones_like(parameters[0])]
+        return updated, 1, {"sum": float(updated[0].sum())}
+
+    def evaluate(self, parameters, config):
+        # simple somme pour confirmer la réception
+        metric = float(np.sum(parameters[0]))
+        return metric, 1, {"received_sum": metric}
+
+
+client = EphemeralClient()
+tls_kwargs = {}
+
+if use_tls and ca:
+    tls_kwargs["root_certificates"] = Path(ca).read_bytes()
+    if cert and key:
+        tls_kwargs["client_certificates"] = (
+            Path(cert).read_bytes(),
+            Path(key).read_bytes(),
+        )
+
+print("Starting ephemeral training round ->", addr)
+fl.client.start_client(server_address=addr, client=client.to_client(), **tls_kwargs)
+print("Ephemeral round completed")
+'''
+
+    remote_cmd = (
+        f"cd {quote_path(base_dir)}/{quote(repo_name)} && "
+        "docker run --rm "
+        "--env-file client/.env "
+        "-e USE_TLS=${USE_TLS:-true} "
+        "-e CA_CERT_PATH=${CA_CERT_PATH:-/certs/ca.crt} "
+        "-e CLIENT_CERT_PATH=${CLIENT_CERT_PATH:-/certs/client.crt} "
+        "-e CLIENT_KEY_PATH=${CLIENT_KEY_PATH:-/certs/client.key} "
+        "-v $(pwd)/certs/client:/certs:ro "
+        "fl-client-dgx:latest python - <<'PY'\n"
+        f"{payload}\n"
+        "PY"
+    )
+    info(logger, "[%s] test d'entraînement éphémère", host)
+    ssh(host, remote_cmd, logger, label="round-test")
 
 
 def tail_logs(host: str, container: str, logger: logging.Logger, lines: int = 20) -> None:
@@ -443,6 +533,9 @@ def main() -> None:
     args = parse_args()
     repo_name = args.repo_name or repo_name_from_url(args.repo_url)
 
+    proxy_base = normalize_remote_path(args.proxy_base)
+    dgx_base = normalize_remote_path(args.dgx_base)
+
     log_file = Path(args.log_file) if args.log_file else Path.cwd() / f"deploy_{dt.datetime.now():%Y%m%d_%H%M%S}.log"
     logger = setup_logger(log_file)
     info(logger, "Journal détaillé : %s", log_file)
@@ -456,25 +549,26 @@ def main() -> None:
         ensure_prerequisites(args.dgx_host, logger)
 
         # 1) Connectivité SSH + Git clone/pull
-        clone_or_pull(args.proxy_host, args.proxy_base, args.repo_url, repo_name, logger)
-        clone_or_pull(args.dgx_host, args.dgx_base, args.repo_url, repo_name, logger)
+        clone_or_pull(args.proxy_host, proxy_base, args.repo_url, repo_name, logger)
+        clone_or_pull(args.dgx_host, dgx_base, args.repo_url, repo_name, logger)
 
         # 2) .env et valeurs de test minimalistes
-        ensure_env(args.proxy_host, args.proxy_base, repo_name, "orchestrator/.env", "orchestrator/.env.example", logger)
-        ensure_env(args.dgx_host, args.dgx_base, repo_name, "client/.env", "client/.env.example", logger)
-        write_test_env(args.proxy_host, args.proxy_base, repo_name, "orchestrator", server_port, logger)
-        write_test_env(args.dgx_host, args.dgx_base, repo_name, "client", server_port, logger)
+        ensure_env(args.proxy_host, proxy_base, repo_name, "orchestrator/.env", "orchestrator/.env.example", logger)
+        ensure_env(args.dgx_host, dgx_base, repo_name, "client/.env", "client/.env.example", logger)
+        write_test_env(args.proxy_host, proxy_base, repo_name, "orchestrator", server_port, logger)
+        write_test_env(args.dgx_host, dgx_base, repo_name, "client", server_port, logger)
 
         # 3) Build + run
-        build_and_run(args.proxy_host, args.proxy_base, repo_name, "orchestrator", logger, args.self_signed)
-        build_and_run(args.dgx_host, args.dgx_base, repo_name, "client", logger, args.self_signed)
+        build_and_run(args.proxy_host, proxy_base, repo_name, "orchestrator", logger, args.self_signed)
+        build_and_run(args.dgx_host, dgx_base, repo_name, "client", logger, args.self_signed)
 
         # 4) Tests
         check_docker(args.proxy_host, logger)
         check_docker(args.dgx_host, logger)
         check_containers(args.proxy_host, logger)
         check_containers(args.dgx_host, logger)
-        grpc_smoke_test(args.dgx_host, args.dgx_base, repo_name, logger)
+        grpc_smoke_test(args.dgx_host, dgx_base, repo_name, logger)
+        simulate_training_round(args.dgx_host, dgx_base, repo_name, logger)
         tail_logs(args.proxy_host, "fl-orchestrator", logger)
         tail_logs(args.dgx_host, "fl-client-dgx", logger)
 
@@ -491,9 +585,9 @@ def main() -> None:
         "Déploiement validé. Pour relancer manuellement:\n"
         "  Orchestrateur: cd %s/%s && ./run_docker_FL.sh orchestrator --self-signed --detach\n"
         "  Client DGX:    cd %s/%s && SERVER_ADDRESS=10.200.241.101:%s ./run_docker_FL.sh client --self-signed --detach",
-        args.proxy_base,
+        proxy_base,
         repo_name,
-        args.dgx_base,
+        dgx_base,
         repo_name,
         server_port,
     )
