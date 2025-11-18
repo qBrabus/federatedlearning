@@ -228,6 +228,19 @@ def quote_path(path: str) -> str:
     return shlex.quote(path)
 
 
+def build_remote_repo_path(base_dir: str, repo_name: str) -> str:
+    """Construit un chemin repo côté hôte distant en conservant $HOME."""
+
+    base = normalize_remote_path(base_dir).rstrip("/")
+    return f"{base}/{repo_name}"
+
+
+def scp_quote_remote(path: str) -> str:
+    """Double-quote un chemin pour scp en laissant $HOME s'étendre."""
+
+    return f'"{path}"'
+
+
 def repo_name_from_url(url: str) -> str:
     segment = url.rstrip("/").split("/")[-1]
     return segment[:-4] if segment.endswith(".git") else segment or DEFAULT_REPO_NAME
@@ -391,8 +404,8 @@ def sync_self_signed_ca(
 
     cert_root = Path(tempfile.mkdtemp(prefix="flwr-ca-"))
     try:
-        proxy_repo = f"{quote_path(proxy_base)}/{quote(repo_name)}"
-        dgx_repo = f"{quote_path(dgx_base)}/{quote(repo_name)}"
+        proxy_repo = build_remote_repo_path(proxy_base, repo_name)
+        dgx_repo = build_remote_repo_path(dgx_base, repo_name)
 
         proxy_ca_crt = f"{proxy_repo}/certs/ca.crt"
         proxy_ca_key = f"{proxy_repo}/certs/ca.key"
@@ -401,8 +414,18 @@ def sync_self_signed_ca(
         local_ca_key = cert_root / "ca.key"
 
         info(logger, "[cert-sync] récupération de la CA auto-signée depuis PROXY")
-        scp(f"{proxy_host}:{proxy_ca_crt}", str(local_ca_crt), logger, label="scp ca.crt")
-        scp(f"{proxy_host}:{proxy_ca_key}", str(local_ca_key), logger, label="scp ca.key")
+        scp(
+            f"{proxy_host}:{scp_quote_remote(proxy_ca_crt)}",
+            str(local_ca_crt),
+            logger,
+            label="scp ca.crt",
+        )
+        scp(
+            f"{proxy_host}:{scp_quote_remote(proxy_ca_key)}",
+            str(local_ca_key),
+            logger,
+            label="scp ca.key",
+        )
 
         info(logger, "[cert-sync] distribution de la CA vers DGX")
         ssh(
@@ -411,8 +434,18 @@ def sync_self_signed_ca(
             logger,
             label="prepare cert dir",
         )
-        scp(str(local_ca_crt), f"{dgx_host}:{quote_path(dgx_repo)}/certs/ca.crt", logger, label="push ca.crt")
-        scp(str(local_ca_key), f"{dgx_host}:{quote_path(dgx_repo)}/certs/ca.key", logger, label="push ca.key")
+        scp(
+            str(local_ca_crt),
+            f"{dgx_host}:{scp_quote_remote(f"{dgx_repo}/certs/ca.crt")}",
+            logger,
+            label="push ca.crt",
+        )
+        scp(
+            str(local_ca_key),
+            f"{dgx_host}:{scp_quote_remote(f"{dgx_repo}/certs/ca.key")}",
+            logger,
+            label="push ca.key",
+        )
         ssh(
             dgx_host,
             f"chmod 644 {quote_path(dgx_repo)}/certs/ca.crt {quote_path(dgx_repo)}/certs/ca.key",
