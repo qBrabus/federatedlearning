@@ -296,13 +296,26 @@ import sys
 preferred = {requested_port}
 max_port = preferred + 50
 
+
 def is_free(port: int) -> bool:
+    """Teste la disponibilité sans nécessiter de privilèges root pour <1024."""
+
+    if port < 1024:
+        # Se contenter d'une connexion sortante pour éviter EACCES sur bind().
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+            result = s.connect_ex(("127.0.0.1", port))
+            return result != 0  # ECONNREFUSED => libre
+
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
         s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         try:
             s.bind(("0.0.0.0", port))
-        except OSError as exc:  # port in use or privilégie
-            if exc.errno in (errno.EACCES, errno.EADDRINUSE, errno.EADDRNOTAVAIL):
+        except OSError as exc:  # port in use or privilégié
+            if exc.errno in (
+                errno.EACCES,
+                errno.EADDRINUSE,
+                errno.EADDRNOTAVAIL,
+            ):
                 return False
             return False
     return True
