@@ -22,6 +22,7 @@ import argparse
 import datetime as dt
 import logging
 import os
+import re
 import shlex
 import shutil
 import subprocess
@@ -169,19 +170,31 @@ def _ssh_prefix(logger: logging.Logger, tool: str) -> list[str]:
 
 
 class _ColorFormatter(logging.Formatter):
-    COLORS = {
+    RESET = "\033[0m"
+    INFO_COLOR = "\033[32m"  # Green
+    TEST_COLOR = "\033[94m"  # Light blue
+    COLOR_BY_LEVEL = {
         logging.DEBUG: "\033[36m",  # Cyan
-        logging.INFO: "\033[94m",  # Light blue for runtime/tests
-        logging.WARNING: "\033[33m",  # Yellow
+        logging.INFO: INFO_COLOR,
+        logging.WARNING: "\033[38;5;208m",  # Orange
         logging.ERROR: "\033[31m",  # Red
         logging.CRITICAL: "\033[35m",  # Magenta
     }
-    RESET = "\033[0m"
 
     def format(self, record: logging.LogRecord) -> str:  # noqa: D401
         base = super().format(record)
-        color = self.COLORS.get(record.levelno, "")
+        message_lower = record.getMessage().lower()
+
+        is_test_log = getattr(record, "is_test", False) or bool(
+            re.search(r"\btests?\b", message_lower)
+        )
+        color = self.TEST_COLOR if is_test_log else self.COLOR_BY_LEVEL.get(record.levelno, "")
+
         return f"{color}{base}{self.RESET}" if color else base
+
+
+def test_log(logger: logging.Logger, msg: str, *args) -> None:
+    logger.info(msg, *args, extra={"is_test": True})
 
 
 def setup_logger(log_file: Path) -> logging.Logger:
@@ -851,8 +864,9 @@ def hub_client_link_diagnostics(
             "set -a; . client/.env; set +a; ",
             "server_host=${SERVER_ADDRESS%%:*}; server_port=${SERVER_ADDRESS##*:}; ",
             "ca_file=$(pwd)/certs/ca.crt; ",
+            "pybin=$(command -v python3 || command -v python || echo python); ",
             "echo '[link] cible:' $server_host:$server_port; ",
-            "python - <<'PY'\n",
+            "$pybin - <<'PY'\n",
             "import socket, os\n",
             "target = os.environ.get('SERVER_ADDRESS', '127.0.0.1:8080')\n",
             "host, port = target.rsplit(':', 1)\n",
@@ -864,7 +878,6 @@ def hub_client_link_diagnostics(
             "    print('[link] échec résolution DNS:', exc)\n",
             "PY\n",
             "ping -c 2 -W 2 $server_host || true; ",
-            "pybin=$(command -v python3 || command -v python || echo python); ",
             "$pybin - <<'PY'\n",
             "import os, socket\n",
             "target = os.environ.get('SERVER_ADDRESS', '127.0.0.1:8080')\n",
@@ -927,7 +940,7 @@ state = channel._channel.check_connectivity_state(True)  # pragma: no cover - in
 print("[grpc] channel ready ->", addr, "state:", state)
 print("[grpc] cible effective:", channel._channel.target().decode())
 '''
-    info(logger, "[%s] test gRPC/mTLS (hub <> client)", host)
+    test_log(logger, "[%s] test gRPC/mTLS (hub <> client)", host)
 
     remote_cmd = (
         f"cd {quote_path(base_dir)}/{quote(repo_name)} && "
@@ -1021,7 +1034,7 @@ print("[round] entraînement éphémère terminé")
         f"{payload}\n"
         "PY"
     )
-    info(logger, "[%s] test d'entraînement éphémère", host)
+    test_log(logger, "[%s] test d'entraînement éphémère", host)
     ssh(host, remote_cmd, logger, label="round-test")
 
 
