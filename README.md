@@ -149,6 +149,11 @@ Exécution :
   --proxy-host PROXY --dgx-host DGX \
   --proxy-base /home/qladane/federated --dgx-base /raid/workspace/qladane/federated
 ```
+- Ajoutez `--tmux-dashboard` (Linux/macOS ou WSL) pour ouvrir automatiquement un tableau de bord tmux avec trois fenêtres :
+  - suivi des logs `fl-orchestrator` (proxy),
+  - suivi des logs `fl-client-dgx` (DGX),
+  - exécution d'un test de présence des conteneurs via `scripts/check_remote_containers.sh` (surchargeable avec `--tmux-test`).
+  - Sur Windows sans WSL, l'option est ignorée et le script repasse en streaming standard des logs.
 
 Ce que fait le script :
 1. Clone ou met à jour `https://github.com/qBrabus/federatedlearning` sur le proxy et le DGX.

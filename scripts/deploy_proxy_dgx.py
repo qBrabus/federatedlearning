@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import argparse
 import logging
+import shutil
 import shlex
 import subprocess
 import sys
@@ -199,6 +200,58 @@ def sync_certs(
         scp(str(local_bundle), f"{dgx_host}:{dgx_target}", logger)
 
 
+def launch_tmux_dashboard(
+    proxy_host: str,
+    dgx_host: str,
+    logger: logging.Logger,
+    session_name: str,
+    test_command: str,
+) -> bool:
+    """Ouvre une session tmux avec deux suivis de logs et un volet de test.
+
+    Retourne ``True`` si le dashboard est lancé, sinon ``False`` (ex. tmux absent
+    ou plateforme non supportée comme Windows).
+    """
+
+    if sys.platform.startswith("win"):
+        logger.warning(
+            "--tmux-dashboard ignoré : tmux n'est pas disponible sur Windows ; utilisez WSL/SSH direct ou le streaming standard"
+        )
+        return False
+
+    if not shutil.which("tmux"):
+        logger.warning("tmux est introuvable : dashboard non lancé")
+        return False
+
+    orch_cmd = (
+        "while true; do "
+        f"ssh {quote(proxy_host)} 'docker logs -f --tail 100 fl-orchestrator' && echo '--- orchestrator stoppé, nouvel essai dans 2s ---'; "
+        "sleep 2; done"
+    )
+    client_cmd = (
+        "while true; do "
+        f"ssh {quote(dgx_host)} 'docker logs -f --tail 100 fl-client-dgx' && echo '--- client stoppé, nouvel essai dans 2s ---'; "
+        "sleep 2; done"
+    )
+
+    default_test = Path(__file__).resolve().parent / "check_remote_containers.sh"
+    test_cmd = test_command or f"PROXY_HOST={quote(proxy_host)} DGX_HOST={quote(dgx_host)} {quote(str(default_test))}"
+
+    logger.info("Ouverture d'un dashboard tmux (%s)", session_name)
+    tmux_setup = [
+        ["tmux", "new-session", "-d", "-s", session_name, "-n", "orchestrator", orch_cmd],
+        ["tmux", "new-window", "-t", f"{session_name}:1", "-n", "client", client_cmd],
+        ["tmux", "new-window", "-t", f"{session_name}:2", "-n", "test", test_cmd],
+    ]
+
+    for command in tmux_setup:
+        run_command(command, logger, label="tmux")
+
+    run_command(["tmux", "select-window", "-t", f"{session_name}:0"], logger, label="tmux")
+    info(logger, "Dashboard tmux prêt. Exécutez : tmux attach -t %s", session_name)
+    return True
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Déploiement orchestrateur (proxy) + client (DGX)")
     parser.add_argument("--proxy-host", default=DEFAULT_PROXY_HOST, help="Entrée SSH pour le proxy (orchestrateur)")
@@ -212,6 +265,9 @@ def parse_args() -> argparse.Namespace:
         default="",
         help="Chemin du fichier de log (par défaut deploy_YYYYMMDD_HHMMSS.log dans le répertoire courant)",
     )
+    parser.add_argument("--tmux-dashboard", action="store_true", help="Ouvre un tmux avec 2 logs + 1 test")
+    parser.add_argument("--tmux-session", default="fl-deploy", help="Nom de session tmux à créer")
+    parser.add_argument("--tmux-test", default="", help="Commande à exécuter dans le 3e volet (sinon check_remote_containers)")
     return parser.parse_args()
 
 
@@ -241,15 +297,26 @@ def main() -> None:
     sync_certs(args.proxy_host, args.proxy_base, args.dgx_host, args.dgx_base, repo_name, logger)
     build_and_run(args.dgx_host, args.dgx_base, repo_name, "client", logger)
 
-    info(logger, "Déploiement terminé, streaming des logs docker (Ctrl+C pour arrêter)...")
+    dashboard_started = False
+    if args.tmux_dashboard:
+        dashboard_started = launch_tmux_dashboard(
+            args.proxy_host,
+            args.dgx_host,
+            logger,
+            args.tmux_session,
+            args.tmux_test,
+        )
 
-    log_threads = [
-        stream_logs(args.proxy_host, "fl-orchestrator", logger),
-        stream_logs(args.dgx_host, "fl-client-dgx", logger),
-    ]
+    if not dashboard_started:
+        info(logger, "Déploiement terminé, streaming des logs docker (Ctrl+C pour arrêter)...")
 
-    for thread in log_threads:
-        thread.join()
+        log_threads = [
+            stream_logs(args.proxy_host, "fl-orchestrator", logger),
+            stream_logs(args.dgx_host, "fl-client-dgx", logger),
+        ]
+
+        for thread in log_threads:
+            thread.join()
 
 
 if __name__ == "__main__":
