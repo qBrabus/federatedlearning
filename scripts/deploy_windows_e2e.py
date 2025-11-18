@@ -438,8 +438,50 @@ def sync_self_signed_ca(
             dgx_host, build_remote_repo_path(dgx_base, repo_name), logger
         )
 
-        proxy_ca_crt = f"{proxy_repo}/certs/ca.crt"
         proxy_ca_key = f"{proxy_repo}/certs/ca.key"
+
+        # La CA devrait se trouver dans certs/ca.crt, mais certains environnements
+        # n'ont que la copie placée dans certs/orchestrator/ca.crt (lorsqu'aucune
+        # CA globale n'a été initialisée avant le build). On cherche donc le
+        # premier fichier existant pour éviter un échec « No such file or
+        # directory » lors du scp.
+        proxy_ca_crt_candidates = [
+            f"{proxy_repo}/certs/ca.crt",
+            f"{proxy_repo}/certs/orchestrator/ca.crt",
+        ]
+        proxy_ca_crt = ""
+
+        ca_detection_script = "\n".join(
+            [
+                "for p in \"" + "\" \"".join(proxy_ca_crt_candidates) + "\"; do",
+                "  if [ -f \"$p\" ]; then",
+                "    echo \"$p\"",
+                "    break",
+                "  fi",
+                "done",
+            ]
+        )
+
+        proxy_ca_crt = (
+            ssh_capture(proxy_host, ca_detection_script, logger, label="locate ca.crt")
+            .strip()
+            .splitlines()
+        )
+
+        proxy_ca_crt = proxy_ca_crt[-1] if proxy_ca_crt else ""
+
+        if not proxy_ca_crt:
+            raise RuntimeError(
+                "Impossible de localiser ca.crt sur le proxy. Relancez le build avec --self-signed."
+            )
+
+        # S'assurer que la clef de CA existe également avant la copie.
+        ssh(
+            proxy_host,
+            f"test -f {quote_path(proxy_ca_key)}",
+            logger,
+            label="check ca.key",
+        )
 
         local_ca_crt = cert_root / "ca.crt"
         local_ca_key = cert_root / "ca.key"
