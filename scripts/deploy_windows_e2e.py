@@ -555,6 +555,17 @@ def check_containers(host: str, logger: logging.Logger) -> None:
     ssh(host, "docker ps --format 'table {{.Names}}\t{{.Status}}'", logger, label=f"docker-ps {host}")
 
 
+def container_exists(host: str, container: str, logger: logging.Logger) -> bool:
+    """Retourne True si le conteneur existe (en cours ou arrêté)."""
+
+    cmd = (
+        "if docker ps -a --format '{{.Names}}' | "
+        f"grep -Fx --quiet {quote(container)}; then echo present; fi"
+    )
+    output = ssh_capture(host, cmd, logger, label="check-container")
+    return "present" in output
+
+
 def grpc_smoke_test(host: str, base_dir: str, repo_name: str, logger: logging.Logger) -> None:
     """Test gRPC/mTLS en lançant un conteneur éphémère client.
 
@@ -673,6 +684,10 @@ print("Ephemeral round completed")
 
 
 def tail_logs(host: str, container: str, logger: logging.Logger, lines: int = 20) -> None:
+    if not container_exists(host, container, logger):
+        info(logger, "[%s] conteneur %s introuvable (probablement terminé), logs sautés", host, container)
+        return
+
     ssh(host, f"docker logs --tail {lines} {quote(container)}", logger, label=f"logs {container}")
 
 
