@@ -823,14 +823,14 @@ def verify_certificates(host: str, base_dir: str, repo_name: str, logger: loggin
         "envfile=$(pwd)/client/.env; "
         "set -a; [ -f $envfile ] && . $envfile; set +a; "
         "server_host=${SERVER_ADDRESS%%:*}; server_port=${SERVER_ADDRESS##*:}; "
-        "echo '[cert] CA fingerprint:' && openssl x509 -noout -fingerprint -sha256 -in "$ca"; "
-        "echo '[cert] serveur:' && openssl x509 -noout -subject -issuer -dates -in "$server"; "
-        "echo '[cert] serveur SAN:' && openssl x509 -noout -ext subjectAltName -in "$server"; "
-        "echo '[cert] client:' && openssl x509 -noout -subject -issuer -dates -in "$client"; "
-        "echo '[cert] client SAN:' && openssl x509 -noout -ext subjectAltName -in "$client"; "
+        "echo '[cert] CA fingerprint:' && openssl x509 -noout -fingerprint -sha256 -in \"$ca\"; "
+        "echo '[cert] serveur:' && openssl x509 -noout -subject -issuer -dates -in \"$server\"; "
+        "echo '[cert] serveur SAN:' && openssl x509 -noout -ext subjectAltName -in \"$server\"; "
+        "echo '[cert] client:' && openssl x509 -noout -subject -issuer -dates -in \"$client\"; "
+        "echo '[cert] client SAN:' && openssl x509 -noout -ext subjectAltName -in \"$client\"; "
         "if command -v openssl >/dev/null 2>&1; then "
         "  echo '[cert] vérification SAN attendu:' $server_host; "
-        "  openssl x509 -in "$server" -noout -ext subjectAltName | grep -E "DNS:${server_host}|IP Address:${server_host}" || true; "
+        "  openssl x509 -in \"$server\" -noout -ext subjectAltName | grep -E \"DNS:${server_host}|IP Address:${server_host}\" || true; "
         "fi; "
         "echo '[cert] connexion testée via openssl s_client:'; "
         "openssl s_client -connect \"$server_host:$server_port\" -CAfile \"$ca\" -servername \"$server_host\" -verify_return_error -brief </dev/null || true"
@@ -845,38 +845,40 @@ def hub_client_link_diagnostics(
 ) -> None:
     """Diagnostics réseau détaillés entre le hub (orchestrateur) et le client."""
 
-    remote_cmd = (
-        f"cd {quote_path(base_dir)}/{quote(repo_name)} && "
-        "set -a; . client/.env; set +a; "
-        "server_host=${SERVER_ADDRESS%%:*}; server_port=${SERVER_ADDRESS##*:}; "
-        "ca_file=$(pwd)/certs/ca.crt; "
-        "echo '[link] cible:' $server_host:$server_port; "
-        "python - <<'PY'\n"
-        "import socket, os\n"
-        "target = os.environ.get('SERVER_ADDRESS', '127.0.0.1:8080')\n"
-        "host, port = target.rsplit(':', 1)\n"
-        "try:\n"
-        "    infos = socket.getaddrinfo(host, int(port))\n"
-        "    unique = sorted({f"{i[4][0]} ({i[0].name})" for i in infos})\n"
-        "    print('[link] résolutions DNS:', ', '.join(unique))\n"
-        "except Exception as exc:  # pragma: no cover - diagnostic\n"
-        "    print('[link] échec résolution DNS:', exc)\n"
-        "PY\n"
-        "ping -c 2 -W 2 $server_host || true; "
-        "pybin=$(command -v python3 || command -v python || echo python); "
-        "$pybin - <<'PY'\n"
-        "import os, socket\n"
-        "target = os.environ.get('SERVER_ADDRESS', '127.0.0.1:8080')\n"
-        "host, port = target.rsplit(':', 1)\n"
-        "print(f'[link] tentative TCP vers {target}...')\n"
-        "with socket.create_connection((host, int(port)), timeout=5) as sock:\n"
-        "    print('[link] TCP OK via', sock.family, 'proto', sock.proto)\n"
-        "PY\n"
-        "if command -v openssl >/dev/null 2>&1; then "
-        "  echo '[link] vérification TLS openssl'; "
-        "  openssl s_client -connect \"$server_host:$server_port\" -CAfile \"$ca_file\" "
-        "-servername \"$server_host\" -verify_return_error -brief </dev/null || true; "
-        "fi"
+    remote_cmd = "".join(
+        [
+            f"cd {quote_path(base_dir)}/{quote(repo_name)} && ",
+            "set -a; . client/.env; set +a; ",
+            "server_host=${SERVER_ADDRESS%%:*}; server_port=${SERVER_ADDRESS##*:}; ",
+            "ca_file=$(pwd)/certs/ca.crt; ",
+            "echo '[link] cible:' $server_host:$server_port; ",
+            "python - <<'PY'\n",
+            "import socket, os\n",
+            "target = os.environ.get('SERVER_ADDRESS', '127.0.0.1:8080')\n",
+            "host, port = target.rsplit(':', 1)\n",
+            "try:\n",
+            "    infos = socket.getaddrinfo(host, int(port))\n",
+            "    unique = sorted({f\"{i[4][0]} ({i[0].name})\" for i in infos})\n",
+            "    print('[link] résolutions DNS:', ', '.join(unique))\n",
+            "except Exception as exc:  # pragma: no cover - diagnostic\n",
+            "    print('[link] échec résolution DNS:', exc)\n",
+            "PY\n",
+            "ping -c 2 -W 2 $server_host || true; ",
+            "pybin=$(command -v python3 || command -v python || echo python); ",
+            "$pybin - <<'PY'\n",
+            "import os, socket\n",
+            "target = os.environ.get('SERVER_ADDRESS', '127.0.0.1:8080')\n",
+            "host, port = target.rsplit(':', 1)\n",
+            "print(f'[link] tentative TCP vers {target}...')\n",
+            "with socket.create_connection((host, int(port)), timeout=5) as sock:\n",
+            "    print('[link] TCP OK via', sock.family, 'proto', sock.proto)\n",
+            "PY\n",
+            "if command -v openssl >/dev/null 2>&1; then ",
+            "  echo '[link] vérification TLS openssl'; ",
+            "  openssl s_client -connect \"$server_host:$server_port\" -CAfile \"$ca_file\" ",
+            "-servername \"$server_host\" -verify_return_error -brief </dev/null || true; ",
+            "fi",
+        ]
     )
 
     info(logger, "[%s] diagnostics réseau hub <> client", dgx_host)
