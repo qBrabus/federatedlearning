@@ -241,6 +241,33 @@ def scp_quote_remote(path: str) -> str:
     return f'"{path}"'
 
 
+def resolve_remote_path(host: str, path: str, logger: logging.Logger) -> str:
+    """Résout un chemin distant en chemin absolu sans variables shell.
+
+    ``scp`` n'expanse pas ``$HOME``/``~`` côté distant. On demande donc à la
+    machine cible de résoudre le chemin (avec ``expanduser``/``expandvars``) via
+    ``python`` puis on réutilise ce chemin absolu pour les transferts. Cela
+    évite les erreurs « No such file » lorsque le dépôt vit sous ``$HOME``.
+    """
+
+    script = rf"""
+python_cmd=$(command -v python3 || command -v python || true)
+if [ -z "$python_cmd" ]; then
+  echo "Python absent sur {host}" >&2
+  exit 1
+fi
+
+"$python_cmd" - <<'PY'
+import os, pathlib
+path = os.path.abspath(os.path.expanduser(os.path.expandvars({path!r})))
+print(pathlib.Path(path))
+PY
+"""
+
+    resolved = ssh_capture(host, script, logger, label=f"realpath {host}")
+    return resolved.strip().splitlines()[-1]
+
+
 def repo_name_from_url(url: str) -> str:
     segment = url.rstrip("/").split("/")[-1]
     return segment[:-4] if segment.endswith(".git") else segment or DEFAULT_REPO_NAME
@@ -404,8 +431,12 @@ def sync_self_signed_ca(
 
     cert_root = Path(tempfile.mkdtemp(prefix="flwr-ca-"))
     try:
-        proxy_repo = build_remote_repo_path(proxy_base, repo_name)
-        dgx_repo = build_remote_repo_path(dgx_base, repo_name)
+        proxy_repo = resolve_remote_path(
+            proxy_host, build_remote_repo_path(proxy_base, repo_name), logger
+        )
+        dgx_repo = resolve_remote_path(
+            dgx_host, build_remote_repo_path(dgx_base, repo_name), logger
+        )
 
         proxy_ca_crt = f"{proxy_repo}/certs/ca.crt"
         proxy_ca_key = f"{proxy_repo}/certs/ca.key"
