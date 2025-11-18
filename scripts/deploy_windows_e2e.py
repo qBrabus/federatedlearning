@@ -621,7 +621,7 @@ SERVER_KEY_PATH=/certs/server.key
             f"printf %s {quote(content)} > orchestrator/.env"
         )
     else:
-        content = f"""SERVER_ADDRESS={server_host}:{server_port}
+        content = f"""SERVER_ADDRESS={server_host}:{server_app_port}
 CLIENT_ID=dgx-client
 N_LOCAL_EPOCHS=1
 BATCH_SIZE=64
@@ -1116,7 +1116,7 @@ except grpc.RpcError as exc:  # pragma: no cover - diagnostic
     print("[round] RPC échouée:", exc)
     if exc.code() == grpc.StatusCode.UNIMPLEMENTED:
         print(
-            "[round] Méthode gRPC inconnue : vérifiez que SERVER_ADDRESS vise le port gRPC exposé (ex: 443/8080)"
+            "[round] Méthode gRPC inconnue : vérifiez que SERVER_ADDRESS vise le port ServerApp exposé (ex: 9091 ou son mapping hôte)"
         )
     raise
 

@@ -75,7 +75,7 @@ Les certificats sont posés en lecture seule (chmod 644) et copiés dans chaque 
 
 2. **Client DGX** (exige un GPU et le driver NVIDIA) :
    ```bash
-   SERVER_ADDRESS=10.200.241.101:443 USE_TLS=true ./run_docker_FL.sh client --self-signed --detach
+   SERVER_ADDRESS=10.200.241.101:9091 USE_TLS=true ./run_docker_FL.sh client --self-signed --detach
    ```
 
 Chaque lancement crée les répertoires `certs/` (si `--self-signed`) et `data/` côté client, monte les certificats, applique les variables d'environnement et démarre les conteneurs `fl-orchestrator` et `fl-client-dgx`. L'option `--detach` garde les conteneurs actifs après le script; définissez `KEEP_CONTAINER_LOGS=true` pour conserver les conteneurs une fois arrêtés.【F:run_docker_FL.sh†L14-L111】【F:run_docker_FL.sh†L112-L201】
@@ -94,7 +94,7 @@ Chaque lancement crée les répertoires `certs/` (si `--self-signed`) et `data/`
 
 ### Client (`client/.env` chargé par `run_docker_FL.sh`)
 
-- `SERVER_ADDRESS` (ex. `10.200.241.101:443`)
+- `SERVER_ADDRESS` (ex. `10.200.241.101:9091`, vise le port ServerApp exposé)
 - `CLIENT_ID` (identifiant Flower, défaut `dgx-client`)
 - `N_LOCAL_EPOCHS`, `BATCH_SIZE`, `LEARNING_RATE` (hyperparamètres locaux)
 - `USE_TLS` (`true`/`false`)
