@@ -21,10 +21,11 @@ from __future__ import annotations
 import argparse
 import datetime as dt
 import logging
+import os
 import shlex
+import shutil
 import subprocess
 import sys
-import shutil
 import tempfile
 from pathlib import Path
 from typing import Iterable
@@ -39,6 +40,38 @@ DEFAULT_SERVER_PORT = 443
 
 LOG_FORMAT_FILE = "%(asctime)s | %(levelname)-8s | %(message)s"
 LOG_FORMAT_CONSOLE = "%(levelname)-8s | %(message)s"
+
+_PASSWORD_ENV_VARS = ("pwdsession", "PWDSSESSION", "PWDSESSION")
+_warned_password_tool = False
+
+
+def _get_password_from_env() -> str:
+    for key in _PASSWORD_ENV_VARS:
+        value = os.environ.get(key)
+        if value:
+            return value
+    return ""
+
+
+def _ssh_prefix(logger: logging.Logger, tool: str) -> list[str]:
+    """Prépare le préfixe ssh/scp en intégrant le mot de passe si possible."""
+
+    password = _get_password_from_env()
+    if not password:
+        return [tool]
+
+    sshpass_path = shutil.which("sshpass")
+    if sshpass_path:
+        return [sshpass_path, "-p", password, tool]
+
+    global _warned_password_tool
+    if not _warned_password_tool:
+        logger.warning(
+            "Variable d'environnement pwdsession détectée mais sshpass absent, "
+            "retour au comportement interactif. Installez sshpass pour éviter les invites."
+        )
+        _warned_password_tool = True
+    return [tool]
 
 
 class _ColorFormatter(logging.Formatter):
@@ -191,19 +224,25 @@ fi
 
 
 def ssh(host: str, command: str, logger: logging.Logger, label: str | None = None) -> None:
-    run_command(["ssh", host, f"set -euo pipefail; {command}"], logger, label or f"ssh {host}")
+    run_command(
+        [*_ssh_prefix(logger, "ssh"), host, f"set -euo pipefail; {command}"],
+        logger,
+        label or f"ssh {host}",
+    )
 
 
 def ssh_capture(
     host: str, command: str, logger: logging.Logger, label: str | None = None
 ) -> str:
     return run_command_capture(
-        ["ssh", host, f"set -euo pipefail; {command}"], logger, label or f"ssh {host}"
+        [*_ssh_prefix(logger, "ssh"), host, f"set -euo pipefail; {command}"],
+        logger,
+        label or f"ssh {host}",
     )
 
 
 def scp(source: str, destination: str, logger: logging.Logger, label: str = "scp") -> None:
-    run_command(["scp", "-r", source, destination], logger, label)
+    run_command([*_ssh_prefix(logger, "scp"), "-r", source, destination], logger, label)
 
 
 def quote(value: str) -> str:
@@ -538,10 +577,11 @@ def sync_self_signed_ca(
 
 def build_and_run(host: str, base_dir: str, repo_name: str, component: str, logger: logging.Logger, self_signed: bool) -> None:
     flags = "--self-signed" if self_signed else ""
+    keep_logs_prefix = "KEEP_CONTAINER_LOGS=true " if component == "client" else ""
     remote_cmd = (
         f"cd {quote_path(base_dir)}/{quote(repo_name)} && "
         f"./build_docker_FL.sh {component} {flags} && "
-        f"./run_docker_FL.sh {component} {flags} --detach"
+        f"{keep_logs_prefix}./run_docker_FL.sh {component} {flags} --detach"
     )
     info(logger, "[%s] build + run %s", host, component)
     ssh(host, remote_cmd, logger)
@@ -566,6 +606,37 @@ def container_exists(host: str, container: str, logger: logging.Logger) -> bool:
     return "present" in output
 
 
+def hub_client_link_diagnostics(
+    dgx_host: str, base_dir: str, repo_name: str, logger: logging.Logger
+) -> None:
+    """Diagnostics réseau détaillés entre le hub (orchestrateur) et le client."""
+
+    remote_cmd = (
+        f"cd {quote_path(base_dir)}/{quote(repo_name)} && "
+        "set -a; . client/.env; set +a; "
+        "server_host=${SERVER_ADDRESS%%:*}; server_port=${SERVER_ADDRESS##*:}; "
+        "ca_file=$(pwd)/certs/ca.crt; "
+        "echo '[link] cible:' $server_host:$server_port; "
+        "ping -c 2 -W 2 $server_host || true; "
+        "python - <<'PY'\n"
+        "import os, socket\n"
+        "target = os.environ.get('SERVER_ADDRESS', '127.0.0.1:8080')\n"
+        "host, port = target.rsplit(':', 1)\n"
+        "print(f'[link] tentative TCP vers {target}...')\n"
+        "with socket.create_connection((host, int(port)), timeout=5) as sock:\n"
+        "    print('[link] TCP OK via', sock.family, 'proto', sock.proto)\n"
+        "PY\n"
+        "if command -v openssl >/dev/null 2>&1; then "
+        "  echo '[link] vérification TLS openssl'; "
+        "  openssl s_client -connect \"$server_host:$server_port\" -CAfile \"$ca_file\" "
+        "-servername fl-orchestrator.local -verify_return_error -brief </dev/null || true; "
+        "fi"
+    )
+
+    info(logger, "[%s] diagnostics réseau hub <> client", dgx_host)
+    ssh(dgx_host, remote_cmd, logger, label="link-check")
+
+
 def grpc_smoke_test(host: str, base_dir: str, repo_name: str, logger: logging.Logger) -> None:
     """Test gRPC/mTLS en lançant un conteneur éphémère client.
 
@@ -582,19 +653,33 @@ use_tls = os.environ.get("USE_TLS", "true").lower() in {"1", "true", "yes"}
 ca = os.environ.get("CA_CERT_PATH", "/certs/ca.crt")
 cert = os.environ.get("CLIENT_CERT_PATH")
 key = os.environ.get("CLIENT_KEY_PATH")
+print("[grpc] cible:", addr)
+print("[grpc] TLS activé:", use_tls)
 if use_tls:
     with open(ca, "rb") as f:
-        if cert and key:
-            with open(cert, "rb") as fc, open(key, "rb") as fk:
-                creds = grpc.ssl_channel_credentials(root_certificates=f.read(), certificate_chain=fc.read(), private_key=fk.read())
-        else:
-            creds = grpc.ssl_channel_credentials(root_certificates=f.read())
+        ca_bytes = f.read()
+    print("[grpc] CA chargée, taille:", len(ca_bytes))
+    if cert and key:
+        with open(cert, "rb") as fc, open(key, "rb") as fk:
+            creds = grpc.ssl_channel_credentials(
+                root_certificates=ca_bytes,
+                certificate_chain=fc.read(),
+                private_key=fk.read(),
+            )
+        print("[grpc] certificat client fourni")
+    else:
+        creds = grpc.ssl_channel_credentials(root_certificates=ca_bytes)
+        print("[grpc] connexion TLS sans certificat client")
     channel = grpc.secure_channel(addr, creds)
 else:
     channel = grpc.insecure_channel(addr)
+
 grpc.channel_ready_future(channel).result(timeout=10)
-print("gRPC channel ready ->", addr)
+state = channel._channel.check_connectivity_state(True)  # pragma: no cover - introspection
+print("[grpc] channel ready ->", addr, "state:", state)
 '''
+    info(logger, "[%s] test gRPC/mTLS (hub <> client)", host)
+
     remote_cmd = (
         f"cd {quote_path(base_dir)}/{quote(repo_name)} && "
         "docker run --rm "
@@ -637,16 +722,20 @@ key = os.environ.get("CLIENT_KEY_PATH")
 
 class EphemeralClient(fl.client.NumPyClient):
     def get_parameters(self, config):
-        return [np.zeros((4,), dtype=np.float32)]
+        baseline = np.zeros((4,), dtype=np.float32)
+        print("[round] paramètres initiaux:", baseline.tolist())
+        return [baseline]
 
     def fit(self, parameters, config):
         # renvoie un vecteur de poids non nuls pour vérifier le round
         updated = [np.ones_like(parameters[0])]
+        print("[round] fit -> somme envoyée:", float(updated[0].sum()))
         return updated, 1, {"sum": float(updated[0].sum())}
 
     def evaluate(self, parameters, config):
         # simple somme pour confirmer la réception
         metric = float(np.sum(parameters[0]))
+        print("[round] evaluate -> somme reçue:", metric)
         return metric, 1, {"received_sum": metric}
 
 
@@ -661,9 +750,13 @@ if use_tls and ca:
             Path(key).read_bytes(),
         )
 
-print("Starting ephemeral training round ->", addr)
+print("[round] destination:", addr)
+print("[round] TLS activé:", bool(tls_kwargs))
+if tls_kwargs:
+    print("[round] certificats fournis:", "client_certificates" in tls_kwargs)
+
 fl.client.start_client(server_address=addr, client=client.to_client(), **tls_kwargs)
-print("Ephemeral round completed")
+print("[round] entraînement éphémère terminé")
 '''
 
     remote_cmd = (
@@ -770,6 +863,7 @@ def main() -> None:
         check_docker(args.dgx_host, logger)
         check_containers(args.proxy_host, logger)
         check_containers(args.dgx_host, logger)
+        hub_client_link_diagnostics(args.dgx_host, dgx_base, repo_name, logger)
         grpc_smoke_test(args.dgx_host, dgx_base, repo_name, logger)
         simulate_training_round(args.dgx_host, dgx_base, repo_name, logger)
         tail_logs(args.proxy_host, "fl-orchestrator", logger)
