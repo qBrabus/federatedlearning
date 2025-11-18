@@ -37,10 +37,13 @@ def quote(value: str) -> str:
 def cleanup_host(host: str, base_dir: str, repo_name: str) -> None:
     repo_path = f"{base_dir}/{repo_name}"
     remote_cmd = (
-        f"docker rm -f fl-orchestrator >/dev/null 2>&1 || true; "
-        f"docker rm -f fl-client-dgx >/dev/null 2>&1 || true; "
-        f"docker rmi -f fl-orchestrator:latest >/dev/null 2>&1 || true; "
-        f"docker rmi -f fl-client-dgx:latest >/dev/null 2>&1 || true; "
+        # Supprime tous les conteneurs Flower (y compris les variantes -e2e)
+        "containers=$(docker ps -aq --filter \"name=fl-orchestrator\" --filter \"name=fl-client-dgx\"); "
+        "if [ -n \"$containers\" ]; then docker rm -f $containers >/dev/null 2>&1 || true; fi; "
+        # Supprime toutes les images construites localement pour le PoC
+        "images=$(docker images --format '{{.Repository}}:{{.Tag}}' | grep '^fl-' || true); "
+        "if [ -n \"$images\" ]; then docker rmi -f $images >/dev/null 2>&1 || true; fi; "
+        # Nettoie dépôt/clones, certificats et données générées
         f"rm -rf {quote(repo_path)}"
     )
     info(f"{host}: suppression conteneurs/images et dépôt {repo_path}")

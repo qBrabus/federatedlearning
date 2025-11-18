@@ -1184,6 +1184,9 @@ def main() -> None:
         # 0bis) Sélection du port serveur (évite les conflits sur 443)
         server_port = find_available_port(args.proxy_host, args.server_port, logger)
 
+        # Hostname résolu pour le client (évite les alias SSH non résolus côté DGX)
+        proxy_hostname, _, _, _ = _resolve_ssh_params(args.proxy_host)
+
         # 0) Prérequis (Git + Docker)
         ensure_prerequisites(args.proxy_host, logger)
         ensure_prerequisites(args.dgx_host, logger)
@@ -1213,7 +1216,7 @@ def main() -> None:
             server_port,
             logger,
             server_app_port=server_app_port,
-            server_host=args.proxy_host,
+            server_host=proxy_hostname,
         )
 
         # 3) Build + run
