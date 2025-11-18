@@ -604,7 +604,8 @@ def write_test_env(
 
     if component == "orchestrator":
         content = f"""FLOWER_SERVER_ADDRESS=0.0.0.0
-FLOWER_SERVER_PORT={server_port}
+FLOWER_SERVER_PORT=8080
+HOST_PORT_OVERRIDE={server_port}
 FLOWER_SERVERAPP_PORT={server_app_port}
 HOST_SERVERAPP_PORT_OVERRIDE={server_app_port}
 GRPC_MAX_MESSAGE_LENGTH=536870912
