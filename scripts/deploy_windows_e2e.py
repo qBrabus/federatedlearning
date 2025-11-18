@@ -27,6 +27,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import socket
 from pathlib import Path
 from typing import Iterable
 
@@ -309,26 +310,32 @@ def _run_paramiko_command(
         output_buf = StringIO()
         err_buf = StringIO()
 
-        if capture:
-            stdout_data = stdout.read().decode()
-            stderr_data = stderr.read().decode()
-            if stdout_data:
-                output_buf.write(stdout_data)
-                for line in stdout_data.splitlines():
-                    logger.info("[%s] %s", label, line)
-            if stderr_data:
-                err_buf.write(stderr_data)
-                for line in stderr_data.splitlines():
-                    logger.info("[%s] %s", label, line)
-        else:
-            for line in stdout:
-                decoded = line.rstrip("\n")
-                output_buf.write(decoded + "\n")
-                logger.info("[%s] %s", label, decoded)
-            for line in stderr:
-                decoded = line.rstrip("\n")
-                err_buf.write(decoded + "\n")
-                logger.info("[%s] %s", label, decoded)
+        try:
+            if capture:
+                stdout_data = stdout.read().decode()
+                stderr_data = stderr.read().decode()
+                if stdout_data:
+                    output_buf.write(stdout_data)
+                    for line in stdout_data.splitlines():
+                        logger.info("[%s] %s", label, line)
+                if stderr_data:
+                    err_buf.write(stderr_data)
+                    for line in stderr_data.splitlines():
+                        logger.info("[%s] %s", label, line)
+            else:
+                for line in stdout:
+                    decoded = line.rstrip("\n")
+                    output_buf.write(decoded + "\n")
+                    logger.info("[%s] %s", label, decoded)
+                for line in stderr:
+                    decoded = line.rstrip("\n")
+                    err_buf.write(decoded + "\n")
+                    logger.info("[%s] %s", label, decoded)
+        except socket.timeout:
+            # Si aucune sortie n'est émise (ex: docker stop silencieux),
+            # on ne considère pas cela comme un échec tant que la commande
+            # s'est terminée correctement.
+            pass
 
         rc = stdout.channel.recv_exit_status()
         if rc:
@@ -758,8 +765,10 @@ def sync_self_signed_ca(
 def build_and_run(host: str, base_dir: str, repo_name: str, component: str, logger: logging.Logger, self_signed: bool) -> None:
     flags = "--self-signed" if self_signed else ""
     keep_logs_prefix = "KEEP_CONTAINER_LOGS=true " if component == "client" else ""
+    container_name = "fl-orchestrator" if component == "orchestrator" else "fl-client-dgx"
     remote_cmd = (
         f"cd {quote_path(base_dir)}/{quote(repo_name)} && "
+        f"docker rm -f {container_name} >/dev/null 2>&1 || true && "
         f"./build_docker_FL.sh {component} {flags} && "
         f"{keep_logs_prefix}./run_docker_FL.sh {component} {flags} --detach"
     )
@@ -980,7 +989,15 @@ def tail_logs(host: str, container: str, logger: logging.Logger, lines: int = 20
 
 def stop_containers(hosts: Iterable[str], logger: logging.Logger) -> None:
     for host in hosts:
-        ssh(host, "docker stop fl-orchestrator >/dev/null 2>&1 || true; docker stop fl-client-dgx >/dev/null 2>&1 || true", logger, label=f"stop {host}")
+        ssh(
+            host,
+            "docker stop fl-orchestrator >/dev/null 2>&1 || true; "
+            "docker stop fl-client-dgx >/dev/null 2>&1 || true; "
+            "docker rm -f fl-orchestrator >/dev/null 2>&1 || true; "
+            "docker rm -f fl-client-dgx >/dev/null 2>&1 || true",
+            logger,
+            label=f"stop {host}",
+        )
 
 
 def parse_args() -> argparse.Namespace:
