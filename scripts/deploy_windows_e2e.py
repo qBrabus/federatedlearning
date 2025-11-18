@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 """Déploiement/validation orchestrateur + client DGX depuis Windows.
 
-Le script ne requiert aucune installation système côté hôtes : seules les
-commandes ``ssh``, ``scp`` et ``docker`` (déjà présentes) sont utilisées. Il :
+Le script utilise uniquement ``ssh``/``scp`` côté machine de pilotage. Sur les
+hôtes distants (PROXY et DGX), il peut installer Git/Docker si absents puis :
 
-1. Clone ou met à jour le dépôt sur PROXY-DATA (hub) et dgxh200 (client).
+1. Clone ou met à jour le dépôt sur PROXY (hub) et DGX (client).
 2. Copie les ``.env`` exemples si nécessaire et force des valeurs de test
    (1 client suffisant, port gRPC configurable, TLS/mTLS activé).
 3. Construit et lance les conteneurs avec certificats auto-signés en option.
@@ -28,8 +28,8 @@ from pathlib import Path
 from typing import Iterable
 
 DEFAULT_REPO_URL = "https://github.com/qBrabus/federatedlearning"
-DEFAULT_PROXY_HOST = "PROXY-DATA"
-DEFAULT_DGX_HOST = "dgxh200"
+DEFAULT_PROXY_HOST = "PROXY"
+DEFAULT_DGX_HOST = "DGX"
 DEFAULT_PROXY_BASE = "~/federated"
 DEFAULT_DGX_BASE = "/raid/workspace/qladane/federated"
 DEFAULT_REPO_NAME = "federatedlearning"
@@ -98,6 +98,63 @@ def run_command(command: list[str], logger: logging.Logger, label: str) -> None:
     process.wait()
     if process.returncode:
         raise subprocess.CalledProcessError(process.returncode, command)
+
+
+def ensure_prerequisites(host: str, logger: logging.Logger) -> None:
+    """Installe Git/Docker si absents et démarre Docker.
+
+    Utilise le script officiel Docker (get.docker.com) pour limiter
+    les dépendances. Les commandes sont exécutées via SSH afin de
+    garder un journal homogène (console + fichier log).
+    """
+
+    remote_cmd = r"""
+set -euo pipefail
+
+have_git=true
+have_docker=true
+
+if ! command -v git >/dev/null 2>&1; then
+  have_git=false
+fi
+
+if ! command -v docker >/dev/null 2>&1; then
+  have_docker=false
+fi
+
+if [ "$have_git" = false ]; then
+  if command -v sudo >/dev/null 2>&1; then
+    sudo apt-get update -y
+    sudo apt-get install -y git
+  else
+    apt-get update -y
+    apt-get install -y git
+  fi
+fi
+
+if [ "$have_docker" = false ]; then
+  curl -fsSL https://get.docker.com | sh
+  if command -v sudo >/dev/null 2>&1; then
+    sudo systemctl enable --now docker 2>/dev/null || true
+    sudo usermod -aG docker "$(whoami)" || true
+  else
+    systemctl enable --now docker 2>/dev/null || true
+    usermod -aG docker "$(whoami)" || true
+  fi
+fi
+
+# S'assure que Docker répond.
+if ! docker info >/dev/null 2>&1; then
+  if command -v sudo >/dev/null 2>&1; then
+    sudo systemctl start docker || true
+  else
+    systemctl start docker || true
+  fi
+fi
+"""
+
+    info(logger, "[%s] vérification/installation Git & Docker", host)
+    ssh(host, remote_cmd, logger, label=f"prereqs {host}")
 
 
 def ssh(host: str, command: str, logger: logging.Logger, label: str | None = None) -> None:
@@ -254,6 +311,10 @@ def main() -> None:
     info(logger, "Journal détaillé : %s", log_file)
 
     try:
+        # 0) Prérequis (Git + Docker)
+        ensure_prerequisites(args.proxy_host, logger)
+        ensure_prerequisites(args.dgx_host, logger)
+
         # 1) Connectivité SSH + Git clone/pull
         clone_or_pull(args.proxy_host, args.proxy_base, args.repo_url, repo_name, logger)
         clone_or_pull(args.dgx_host, args.dgx_base, args.repo_url, repo_name, logger)
