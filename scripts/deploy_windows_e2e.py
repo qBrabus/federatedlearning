@@ -371,8 +371,14 @@ def check_containers(host: str, logger: logging.Logger) -> None:
     ssh(host, "docker ps --format 'table {{.Names}}\t{{.Status}}'", logger, label=f"docker-ps {host}")
 
 
-def grpc_smoke_test(host: str, logger: logging.Logger) -> None:
-    """Test gRPC/mTLS depuis le conteneur client."""
+def grpc_smoke_test(host: str, base_dir: str, repo_name: str, logger: logging.Logger) -> None:
+    """Test gRPC/mTLS en lançant un conteneur éphémère client.
+
+    Le conteneur ``fl-client-dgx`` utilisé pour l'entraînement peut s'arrêter
+    rapidement (1 round seulement). On démarre donc un conteneur dédié pour
+    valider la connectivité gRPC/mTLS à l'aide du même fichier ``.env`` et des
+    certificats déjà générés.
+    """
 
     payload = r'''
 import os, grpc
@@ -394,8 +400,20 @@ else:
 grpc.channel_ready_future(channel).result(timeout=10)
 print("gRPC channel ready ->", addr)
 '''
-    cmd = f"docker exec fl-client-dgx python - <<'PY'\n{payload}\nPY"
-    ssh(host, cmd, logger, label="grpc-test")
+    remote_cmd = (
+        f"cd {quote(base_dir)}/{quote(repo_name)} && "
+        "docker run --rm "
+        "--env-file client/.env "
+        "-e USE_TLS=${USE_TLS:-true} "
+        "-e CA_CERT_PATH=${CA_CERT_PATH:-/certs/ca.crt} "
+        "-e CLIENT_CERT_PATH=${CLIENT_CERT_PATH:-/certs/client.crt} "
+        "-e CLIENT_KEY_PATH=${CLIENT_KEY_PATH:-/certs/client.key} "
+        "-v $(pwd)/certs/client:/certs:ro "
+        "fl-client-dgx:latest python - <<'PY'\n"
+        f"{payload}\n"
+        "PY"
+    )
+    ssh(host, remote_cmd, logger, label="grpc-test")
 
 
 def tail_logs(host: str, container: str, logger: logging.Logger, lines: int = 20) -> None:
@@ -456,7 +474,7 @@ def main() -> None:
         check_docker(args.dgx_host, logger)
         check_containers(args.proxy_host, logger)
         check_containers(args.dgx_host, logger)
-        grpc_smoke_test(args.dgx_host, logger)
+        grpc_smoke_test(args.dgx_host, args.dgx_base, repo_name, logger)
         tail_logs(args.proxy_host, "fl-orchestrator", logger)
         tail_logs(args.dgx_host, "fl-client-dgx", logger)
 
