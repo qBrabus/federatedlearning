@@ -298,7 +298,7 @@ max_port = preferred + 50
 
 
 def is_free(port: int) -> bool:
-    """Teste la disponibilité sans nécessiter de privilèges root pour <1024."""
+    '''Teste la disponibilité sans nécessiter de privilèges root pour <1024.'''
 
     if port < 1024:
         # Se contenter d'une connexion sortante pour éviter EACCES sur bind().
