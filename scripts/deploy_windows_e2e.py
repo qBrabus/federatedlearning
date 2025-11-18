@@ -43,6 +43,8 @@ LOG_FORMAT_CONSOLE = "%(levelname)-8s | %(message)s"
 
 _PASSWORD_ENV_VARS = ("pwdsession", "PWDSSESSION", "PWDSESSION")
 _warned_password_tool = False
+_use_paramiko = False
+_ssh_config = None
 
 
 def _get_password_from_env() -> str:
@@ -51,6 +53,94 @@ def _get_password_from_env() -> str:
         if value:
             return value
     return ""
+
+
+def _load_ssh_config() -> "paramiko.SSHConfig | None":
+    try:
+        import paramiko
+    except ImportError:
+        return None
+
+    config_path = Path.home() / ".ssh" / "config"
+    if not config_path.exists():
+        return None
+
+    config = paramiko.SSHConfig()
+    with config_path.open("r", encoding="utf-8", errors="replace") as fh:
+        config.parse(fh)
+    return config
+
+
+def _enable_paramiko(logger: logging.Logger) -> bool:
+    global _use_paramiko, _ssh_config, _warned_password_tool
+
+    if _use_paramiko:
+        return True
+
+    try:
+        import paramiko  # type: ignore
+    except ImportError:
+        if not _warned_password_tool:
+            logger.warning(
+                "Variable d'environnement pwdsession détectée mais sshpass absent. "
+                "Installez sshpass ou 'pip install paramiko' pour éviter les invites."
+            )
+            _warned_password_tool = True
+        return False
+
+    _ssh_config = _load_ssh_config()
+    _use_paramiko = True
+    info(logger, "sshpass absent : bascule vers Paramiko pour l'authentification password.")
+    return True
+
+
+def _resolve_ssh_params(host: str) -> tuple[str, str | None, int, list[str]]:
+    """Résout l'hôte, l'utilisateur, le port et les clés depuis ~/.ssh/config."""
+
+    username: str | None = None
+    hostname = host
+    port = 22
+    key_files: list[str] = []
+
+    if "@" in host:
+        user, sep, h = host.partition("@")
+        if sep:
+            username, hostname = user, h
+
+    if _ssh_config is not None:
+        lookup = _ssh_config.lookup(host)
+        hostname = lookup.get("hostname", hostname)
+        username = lookup.get("user", username)
+        if "port" in lookup:
+            try:
+                port = int(lookup["port"])
+            except ValueError:
+                port = 22
+        if "identityfile" in lookup:
+            key_files = lookup["identityfile"]
+
+    return hostname, username, port, key_files
+
+
+def _open_paramiko_client(host: str):
+    import paramiko
+
+    hostname, username, port, key_files = _resolve_ssh_params(host)
+    password = _get_password_from_env() or None
+
+    client = paramiko.SSHClient()
+    client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+    client.connect(
+        hostname=hostname,
+        port=port,
+        username=username,
+        password=password,
+        look_for_keys=True,
+        allow_agent=True,
+        key_filename=key_files or None,
+        timeout=10,
+    )
+    return client
 
 
 def _ssh_prefix(logger: logging.Logger, tool: str) -> list[str]:
@@ -63,6 +153,9 @@ def _ssh_prefix(logger: logging.Logger, tool: str) -> list[str]:
     sshpass_path = shutil.which("sshpass")
     if sshpass_path:
         return [sshpass_path, "-p", password, tool]
+
+    if os.name == "nt" and _enable_paramiko(logger):
+        return [tool]
 
     global _warned_password_tool
     if not _warned_password_tool:
@@ -166,6 +259,84 @@ def run_command_capture(command: list[str], logger: logging.Logger, label: str) 
     return result.stdout
 
 
+def _scp_paramiko(source: str, destination: str, logger: logging.Logger, label: str) -> None:
+    import posixpath
+
+    def _is_remote(path: str) -> bool:
+        return Path(path).drive == "" and ":" in path
+
+    def _split_remote(path: str) -> tuple[str, str]:
+        host, _, remote_path = path.partition(":")
+        return host, remote_path.strip("\"")
+
+    if _is_remote(source) and not _is_remote(destination):
+        host, remote_path = _split_remote(source)
+        with _open_paramiko_client(host) as client:
+            with client.open_sftp() as sftp:
+                remote_norm = sftp.normalize(remote_path)
+                logger.info("[%s] téléchargement %s -> %s", label, remote_norm, destination)
+                sftp.get(remote_norm, destination)
+        return
+
+    if _is_remote(destination) and not _is_remote(source):
+        host, remote_path = _split_remote(destination)
+        with _open_paramiko_client(host) as client:
+            with client.open_sftp() as sftp:
+                remote_norm = sftp.normalize(remote_path)
+                remote_dir = posixpath.dirname(remote_norm)
+                if remote_dir:
+                    try:
+                        sftp.stat(remote_dir)
+                    except FileNotFoundError:
+                        sftp.mkdir(remote_dir)
+                logger.info("[%s] upload %s -> %s", label, source, remote_norm)
+                sftp.put(source, remote_norm)
+        return
+
+    raise ValueError("La copie Paramiko supporte seulement local<->remote")
+
+
+def _run_paramiko_command(
+    host: str, command: str, logger: logging.Logger, label: str, capture: bool = False
+) -> str:
+    from io import StringIO
+
+    with _open_paramiko_client(host) as client:
+        stdin, stdout, stderr = client.exec_command(f"set -euo pipefail; {command}")
+        stdout.channel.settimeout(10)
+        stderr.channel.settimeout(10)
+
+        output_buf = StringIO()
+        err_buf = StringIO()
+
+        if capture:
+            stdout_data = stdout.read().decode()
+            stderr_data = stderr.read().decode()
+            if stdout_data:
+                output_buf.write(stdout_data)
+                for line in stdout_data.splitlines():
+                    logger.info("[%s] %s", label, line)
+            if stderr_data:
+                err_buf.write(stderr_data)
+                for line in stderr_data.splitlines():
+                    logger.info("[%s] %s", label, line)
+        else:
+            for line in stdout:
+                decoded = line.rstrip("\n")
+                output_buf.write(decoded + "\n")
+                logger.info("[%s] %s", label, decoded)
+            for line in stderr:
+                decoded = line.rstrip("\n")
+                err_buf.write(decoded + "\n")
+                logger.info("[%s] %s", label, decoded)
+
+        rc = stdout.channel.recv_exit_status()
+        if rc:
+            raise subprocess.CalledProcessError(rc, command)
+
+        return output_buf.getvalue()
+
+
 def ensure_prerequisites(host: str, logger: logging.Logger) -> None:
     """Installe Git/Docker si absents et démarre Docker.
 
@@ -224,16 +395,22 @@ fi
 
 
 def ssh(host: str, command: str, logger: logging.Logger, label: str | None = None) -> None:
-    run_command(
-        [*_ssh_prefix(logger, "ssh"), host, f"set -euo pipefail; {command}"],
-        logger,
-        label or f"ssh {host}",
-    )
+    if _use_paramiko:
+        _run_paramiko_command(host, command, logger, label or f"ssh {host}")
+    else:
+        run_command(
+            [*_ssh_prefix(logger, "ssh"), host, f"set -euo pipefail; {command}"],
+            logger,
+            label or f"ssh {host}",
+        )
 
 
 def ssh_capture(
     host: str, command: str, logger: logging.Logger, label: str | None = None
 ) -> str:
+    if _use_paramiko:
+        return _run_paramiko_command(host, command, logger, label or f"ssh {host}", capture=True)
+
     return run_command_capture(
         [*_ssh_prefix(logger, "ssh"), host, f"set -euo pipefail; {command}"],
         logger,
@@ -242,7 +419,10 @@ def ssh_capture(
 
 
 def scp(source: str, destination: str, logger: logging.Logger, label: str = "scp") -> None:
-    run_command([*_ssh_prefix(logger, "scp"), "-r", source, destination], logger, label)
+    if _use_paramiko:
+        _scp_paramiko(source, destination, logger, label)
+    else:
+        run_command([*_ssh_prefix(logger, "scp"), "-r", source, destination], logger, label)
 
 
 def quote(value: str) -> str:
@@ -618,7 +798,8 @@ def hub_client_link_diagnostics(
         "ca_file=$(pwd)/certs/ca.crt; "
         "echo '[link] cible:' $server_host:$server_port; "
         "ping -c 2 -W 2 $server_host || true; "
-        "python - <<'PY'\n"
+        "pybin=$(command -v python3 || command -v python || echo python); "
+        "$pybin - <<'PY'\n"
         "import os, socket\n"
         "target = os.environ.get('SERVER_ADDRESS', '127.0.0.1:8080')\n"
         "host, port = target.rsplit(':', 1)\n"
