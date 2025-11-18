@@ -24,6 +24,8 @@ import logging
 import shlex
 import subprocess
 import sys
+import shutil
+import tempfile
 from pathlib import Path
 from typing import Iterable
 
@@ -370,6 +372,57 @@ PY
     return available
 
 
+def sync_self_signed_ca(
+    proxy_host: str,
+    proxy_base: str,
+    dgx_host: str,
+    dgx_base: str,
+    repo_name: str,
+    logger: logging.Logger,
+) -> None:
+    """Copie la CA auto-signée générée sur le proxy vers le DGX.
+
+    Sans cette synchronisation, chaque hôte génère sa propre CA, ce qui entraîne
+    un échec du handshake TLS côté client (le certificat du serveur n'est pas
+    signé par la même autorité que celle connue du client). On récupère donc le
+    couple ``ca.crt``/``ca.key`` du proxy puis on le pousse vers le DGX avant la
+    construction/lancement du client.
+    """
+
+    cert_root = Path(tempfile.mkdtemp(prefix="flwr-ca-"))
+    try:
+        proxy_repo = f"{quote_path(proxy_base)}/{quote(repo_name)}"
+        dgx_repo = f"{quote_path(dgx_base)}/{quote(repo_name)}"
+
+        proxy_ca_crt = f"{proxy_repo}/certs/ca.crt"
+        proxy_ca_key = f"{proxy_repo}/certs/ca.key"
+
+        local_ca_crt = cert_root / "ca.crt"
+        local_ca_key = cert_root / "ca.key"
+
+        info(logger, "[cert-sync] récupération de la CA auto-signée depuis PROXY")
+        scp(f"{proxy_host}:{proxy_ca_crt}", str(local_ca_crt), logger, label="scp ca.crt")
+        scp(f"{proxy_host}:{proxy_ca_key}", str(local_ca_key), logger, label="scp ca.key")
+
+        info(logger, "[cert-sync] distribution de la CA vers DGX")
+        ssh(
+            dgx_host,
+            f"mkdir -p {quote_path(dgx_repo)}/certs && chmod 755 {quote_path(dgx_repo)}/certs",
+            logger,
+            label="prepare cert dir",
+        )
+        scp(str(local_ca_crt), f"{dgx_host}:{quote_path(dgx_repo)}/certs/ca.crt", logger, label="push ca.crt")
+        scp(str(local_ca_key), f"{dgx_host}:{quote_path(dgx_repo)}/certs/ca.key", logger, label="push ca.key")
+        ssh(
+            dgx_host,
+            f"chmod 644 {quote_path(dgx_repo)}/certs/ca.crt {quote_path(dgx_repo)}/certs/ca.key",
+            logger,
+            label="fix perms",
+        )
+    finally:
+        shutil.rmtree(cert_root, ignore_errors=True)
+
+
 def build_and_run(host: str, base_dir: str, repo_name: str, component: str, logger: logging.Logger, self_signed: bool) -> None:
     flags = "--self-signed" if self_signed else ""
     remote_cmd = (
@@ -560,6 +613,15 @@ def main() -> None:
 
         # 3) Build + run
         build_and_run(args.proxy_host, proxy_base, repo_name, "orchestrator", logger, args.self_signed)
+        if args.self_signed:
+            sync_self_signed_ca(
+                proxy_host=args.proxy_host,
+                proxy_base=proxy_base,
+                dgx_host=args.dgx_host,
+                dgx_base=dgx_base,
+                repo_name=repo_name,
+                logger=logger,
+            )
         build_and_run(args.dgx_host, dgx_base, repo_name, "client", logger, args.self_signed)
 
         # 4) Tests

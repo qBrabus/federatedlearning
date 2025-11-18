@@ -17,8 +17,8 @@ Ce dépôt fournit une démonstration complète d'apprentissage fédéré basée
 ## Architecture des sources
 ```
 ./
-├─ orchestrator/               # Image du hub Flower (serveur gRPC, TLS/mTLS)
-│  ├─ app/server.py            # Démarrage du serveur Flower et chargement des certificats
+├─ orchestrator/               # Image du hub Flower (SuperLink gRPC, TLS/mTLS)
+│  ├─ app/server.py            # Construction + exécution de la CLI `flower-superlink`
 │  └─ .env.example             # Variables d'environnement orchestrateur (ports, seuils clients...)
 ├─ client/                     # Image du client DGX (PyTorch + Flower)
 │  ├─ app/client.py            # Client Flower générant des données synthétiques
@@ -33,8 +33,8 @@ Ce dépôt fournit une démonstration complète d'apprentissage fédéré basée
 
 ### Code applicatif
 - **Orchestrateur** (`orchestrator/app/server.py`)
-  - Lit les variables d'environnement (`FLOWER_SERVER_ADDRESS`, `FLOWER_SERVER_PORT`, `NUM_ROUNDS`, `MIN_FIT_CLIENTS`, `MIN_AVAILABLE_CLIENTS`, etc.).
-  - Charge les certificats si `CA_CERT_PATH`, `SERVER_CERT_PATH` et `SERVER_KEY_PATH` sont définis, puis démarre `fl.server.start_server` avec la stratégie `FedAvg`.
+  - Lit les variables d'environnement (`FLOWER_SERVER_ADDRESS`, `FLOWER_SERVER_PORT`, `USE_TLS`, chemins des certificats).
+  - Lance l'orchestrateur via la CLI **`flower-superlink`** (recommandée par Flower) en TLS/mTLS si les certificats sont fournis, sinon en mode `--insecure`.
 - **Client** (`client/app/client.py`)
   - Paramétrable via l'environnement (`SERVER_ADDRESS`, `CLIENT_ID`, `N_LOCAL_EPOCHS`, `BATCH_SIZE`, `LEARNING_RATE`, `USE_TLS`, chemins des certificats).
   - Crée un MLP simple, génère des données synthétiques et se connecte au hub via `fl.client.start_client`. Gère automatiquement le cas TLS/mTLS.
