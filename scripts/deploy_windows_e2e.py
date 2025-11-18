@@ -688,7 +688,20 @@ def tail_logs(host: str, container: str, logger: logging.Logger, lines: int = 20
         info(logger, "[%s] conteneur %s introuvable (probablement terminé), logs sautés", host, container)
         return
 
-    ssh(host, f"docker logs --tail {lines} {quote(container)}", logger, label=f"logs {container}")
+    try:
+        ssh(
+            host,
+            f"docker logs --tail {lines} {quote(container)}",
+            logger,
+            label=f"logs {container}",
+        )
+    except subprocess.CalledProcessError:
+        info(
+            logger,
+            "[%s] conteneur %s a disparu avant la lecture des logs, saut",  # pragma: no cover - dépend du timing Docker
+            host,
+            container,
+        )
 
 
 def stop_containers(hosts: Iterable[str], logger: logging.Logger) -> None:
