@@ -6,6 +6,13 @@ if [[ -t 0 ]]; then
   DOCKER_TTY_FLAG="-it"
 fi
 
+# Désactive la suppression automatique des conteneurs lorsque
+# KEEP_CONTAINER_LOGS=true (utile pour inspecter les logs après arrêt).
+DOCKER_RM_FLAG="--rm"
+if [[ "${KEEP_CONTAINER_LOGS:-false}" == "true" ]]; then
+  DOCKER_RM_FLAG=""
+fi
+
 usage() {
   echo "Usage: $0 [orchestrator|client] [--self-signed] [--detach]" >&2
   echo "Exemples:" >&2
@@ -71,7 +78,7 @@ case "$COMPONENT" in
       DOCKER_DETACH_FLAG="-d"
     fi
 
-    docker run --rm ${DOCKER_TTY_FLAG} ${DOCKER_DETACH_FLAG} \
+    docker run ${DOCKER_RM_FLAG} ${DOCKER_TTY_FLAG} ${DOCKER_DETACH_FLAG} \
       --name fl-orchestrator \
       --env-file "$ORCH_ENV_FILE" \
       -e CA_CERT_PATH=${CA_CERT_PATH:-/certs/ca.crt} \
@@ -125,7 +132,7 @@ case "$COMPONENT" in
       DOCKER_DETACH_FLAG="-d"
     fi
 
-    docker run --rm ${DOCKER_TTY_FLAG} ${DOCKER_DETACH_FLAG} \
+    docker run ${DOCKER_RM_FLAG} ${DOCKER_TTY_FLAG} ${DOCKER_DETACH_FLAG} \
       --gpus all \
       --name fl-client-dgx \
       --env-file "$CLIENT_ENV_FILE" \
