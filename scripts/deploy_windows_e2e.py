@@ -652,9 +652,19 @@ def _list_proxy_addresses(proxy_host: str, logger: logging.Logger) -> list[str]:
 
 
 def _is_reachable_from_dgx(
-    dgx_host: str, target_host: str, target_port: int, logger: logging.Logger
+    dgx_host: str,
+    target_host: str,
+    target_port: int,
+    logger: logging.Logger,
+    accept_conn_refused: bool = False,
 ) -> bool:
-    """Teste une connexion TCP depuis le DGX vers la cible."""
+    """Teste une connexion TCP depuis le DGX vers la cible.
+
+    Quand ``accept_conn_refused`` est vrai, une erreur ``ECONNREFUSED`` est
+    considérée comme un signe de chemin réseau valide (le port n'écoute pas
+    encore mais n'est pas filtré), ce qui permet de choisir un port
+    atteignable avant de démarrer l'orchestrateur.
+    """
 
     script = rf"""
 pybin=$(command -v python3 || command -v python || true)
@@ -664,13 +674,17 @@ if [ -z "$pybin" ]; then
 fi
 
 "$pybin" - <<'PY'
-import socket, sys
+import errno, socket, sys
 host = {target_host!r}
 port = {target_port}
+accept_conn_refused = {str(accept_conn_refused).lower()}
 try:
     with socket.create_connection((host, port), timeout=3):
         sys.exit(0)
-except Exception as exc:  # pragma: no cover - diagnostic
+except OSError as exc:  # pragma: no cover - diagnostic
+    if accept_conn_refused and exc.errno == errno.ECONNREFUSED:
+        print("ECONNREFUSED (chemin réseau OK, port fermé)")
+        sys.exit(0)
     print(exc)
     sys.exit(1)
 PY
@@ -702,6 +716,62 @@ def select_server_host(
 
     info(logger, "[%s] aucune adresse joignable trouvée, utilisation de %s", dgx_host, proxy_hostname)
     return proxy_hostname
+
+
+def select_server_endpoint(
+    proxy_host: str, dgx_host: str, requested_port: int, logger: logging.Logger
+) -> tuple[str, int]:
+    """Choisit (hôte, port) joignables depuis le DGX avec repli automatique.
+
+    On privilégie le port demandé, puis 8443 lorsqu'on part de 443, avant de
+    tester une courte plage non privilégiée pour éviter les ports filtrés.
+    Chaque port candidat est d'abord vérifié côté proxy (libre ou port de
+    remplacement) puis testé depuis le DGX en acceptant ``ECONNREFUSED`` comme
+    indicateur de chemin réseau ouvert.
+    """
+
+    proxy_hostname, _, _, _ = _resolve_ssh_params(proxy_host)
+    host_candidates: list[str] = [proxy_hostname]
+    for addr in _list_proxy_addresses(proxy_host, logger):
+        if addr not in host_candidates:
+            host_candidates.append(addr)
+
+    port_candidates: list[int] = [requested_port]
+    if requested_port == 443 and 8443 not in port_candidates:
+        port_candidates.append(8443)
+
+    fallback_start = 1024 if requested_port < 1024 else requested_port + 1
+    for port in range(fallback_start, fallback_start + 20):
+        if port not in port_candidates:
+            port_candidates.append(port)
+
+    tested_pairs: set[tuple[str, int]] = set()
+
+    for candidate in port_candidates:
+        available_port = find_available_port(proxy_host, candidate, logger)
+
+        for host in host_candidates:
+            pair = (host, available_port)
+            if pair in tested_pairs:
+                continue
+            tested_pairs.add(pair)
+
+            if _is_reachable_from_dgx(
+                dgx_host, host, available_port, logger, accept_conn_refused=True
+            ):
+                info(
+                    logger,
+                    "[%s] adresse %s joignable sur port %s, utilisation",
+                    dgx_host,
+                    host,
+                    available_port,
+                )
+                return host, available_port
+
+    raise RuntimeError(
+        "Aucun port accessible depuis le DGX après test des ports candidats. "
+        "Vérifiez les règles réseau/firewall ou forcez un port autorisé avec --server-port."
+    )
 
 
 def find_available_port(host: str, requested_port: int, logger: logging.Logger) -> int:
@@ -1325,15 +1395,14 @@ def main() -> None:
         _enable_paramiko(logger)
 
     try:
-        # 0bis) Sélection du port serveur (évite les conflits sur 443)
-        server_port = find_available_port(args.proxy_host, args.server_port, logger)
+        # 0bis) Sélection du port serveur (évite les conflits sur 443) + accessibilité
+        server_host, server_port = select_server_endpoint(
+            args.proxy_host, args.dgx_host, args.server_port, logger
+        )
 
         # 0) Prérequis (Git + Docker)
         ensure_prerequisites(args.proxy_host, logger)
         ensure_prerequisites(args.dgx_host, logger)
-
-        # Choix de l'adresse proxy réellement accessible depuis le DGX
-        server_host = select_server_host(args.proxy_host, args.dgx_host, server_port, logger)
 
         # 1) Connectivité SSH + Git clone/pull
         clone_or_pull(args.proxy_host, proxy_base, args.repo_url, repo_name, logger)
