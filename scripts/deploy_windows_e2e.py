@@ -804,6 +804,7 @@ fi
 import errno
 import socket
 import sys
+from typing import Optional
 
 requested = {requested_port}
 preferred: list[int] = []
@@ -816,10 +817,10 @@ if requested == 443:
     preferred.append(8443)
 
 # Ensuite, préférer une plage non privilégiée pour éviter les blocages ACL
-fallback_start = 1024 if requested < 1024 else requested + 1
-for port in range(fallback_start, fallback_start + 50):
-    if port not in preferred:
-        preferred.append(port)
+    fallback_start = 1024 if requested < 1024 else requested + 1
+    for port in range(fallback_start, fallback_start + 200):
+        if port not in preferred:
+            preferred.append(port)
 
 
 def is_free(port: int) -> bool:
@@ -828,11 +829,13 @@ def is_free(port: int) -> bool:
     if port < 1024:
         # Se contenter d'une connexion sortante pour éviter EACCES sur bind().
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+            s.settimeout(0.5)
             result = s.connect_ex(("127.0.0.1", port))
             return result != 0  # ECONNREFUSED => libre
 
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
         s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        s.settimeout(0.5)
         try:
             s.bind(("0.0.0.0", port))
         except OSError as exc:  # port in use or privilégié
@@ -847,10 +850,39 @@ def is_free(port: int) -> bool:
     return True
 
 
-for candidate in preferred:
-    if is_free(candidate):
-        print(candidate)
-        sys.exit(0)
+def find_first_available(candidates: list[int]) -> Optional[int]:
+    import concurrent.futures
+
+    results: dict[int, bool] = {}
+
+    with concurrent.futures.ThreadPoolExecutor(
+        max_workers=min(32, len(candidates))
+    ) as executor:
+        future_to_port = {executor.submit(is_free, port): port for port in candidates}
+
+        while future_to_port:
+            done, _ = concurrent.futures.wait(
+                future_to_port, return_when=concurrent.futures.FIRST_COMPLETED
+            )
+
+            for future in done:
+                port = future_to_port.pop(future)
+                try:
+                    results[port] = future.result()
+                except Exception:
+                    results[port] = False
+
+            for port in candidates:
+                if results.get(port):
+                    return port
+
+    return None
+
+
+available_port = find_first_available(preferred)
+if available_port is not None:
+    print(available_port)
+    sys.exit(0)
 
 print("Aucun port libre trouvé", file=sys.stderr)
 sys.exit(1)
