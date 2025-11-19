@@ -892,6 +892,7 @@ sys.exit(1)
 PY
 """
         ).replace("$requested_port", str(requested_port))
+    )
 
     output = ssh_capture(host, remote_cmd, logger, label="port-check")
     try:
