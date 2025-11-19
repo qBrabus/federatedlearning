@@ -32,7 +32,6 @@ import socket
 import textwrap
 from pathlib import Path
 from typing import Iterable
-from string import Template
 
 DEFAULT_REPO_URL = "https://github.com/qBrabus/federatedlearning"
 DEFAULT_PROXY_HOST = "PROXY"
@@ -795,7 +794,7 @@ def find_available_port(host: str, requested_port: int, logger: logging.Logger) 
     """
 
     info(logger, "[%s] vérification du port %s", host, requested_port)
-    remote_cmd = Template(
+    remote_cmd = (
         textwrap.dedent(
             r"""
 python_cmd=$(command -v python3 || command -v python || true)
@@ -892,8 +891,7 @@ print("Aucun port libre trouvé", file=sys.stderr)
 sys.exit(1)
 PY
 """
-        )
-    ).substitute(requested_port=requested_port)
+        ).replace("$requested_port", str(requested_port))
 
     output = ssh_capture(host, remote_cmd, logger, label="port-check")
     try:
