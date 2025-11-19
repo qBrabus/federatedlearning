@@ -75,6 +75,8 @@ def _load_ssh_config() -> "paramiko.SSHConfig | None":
 
 
 def _enable_paramiko(logger: logging.Logger) -> bool:
+    """Active Paramiko si disponible (mot de passe ou clés SSH)."""
+
     global _use_paramiko, _ssh_config, _warned_password_tool
 
     if _use_paramiko:
@@ -85,15 +87,15 @@ def _enable_paramiko(logger: logging.Logger) -> bool:
     except ImportError:
         if not _warned_password_tool:
             logger.warning(
-                "Variable d'environnement pwdsession détectée mais sshpass absent. "
-                "Installez sshpass ou 'pip install paramiko' pour éviter les invites."
+                "Paramiko non installé : impossible d'utiliser l'authentification mot de passe. "
+                "Installez-le via 'pip install paramiko' pour éviter les invites interactives."
             )
             _warned_password_tool = True
         return False
 
     _ssh_config = _load_ssh_config()
     _use_paramiko = True
-    info(logger, "sshpass absent : bascule vers Paramiko pour l'authentification password.")
+    info(logger, "Paramiko activé pour les opérations SSH/SCP (password ou clés).")
     return True
 
 
@@ -133,6 +135,14 @@ def _open_paramiko_client(host: str):
 
     client = paramiko.SSHClient()
     client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+    logging.getLogger("deploy-win").debug(
+        "[paramiko] connexion %s (user=%s, port=%s, keys=%s, password=%s)",
+        hostname,
+        username or "<défaut>",
+        port,
+        ",".join(key_files) if key_files else "<ssh-agent/def>",
+        "oui" if password else "non",
+    )
     client.connect(
         hostname=hostname,
         port=port,
@@ -149,24 +159,9 @@ def _open_paramiko_client(host: str):
 def _ssh_prefix(logger: logging.Logger, tool: str) -> list[str]:
     """Prépare le préfixe ssh/scp en intégrant le mot de passe si possible."""
 
-    password = _get_password_from_env()
-    if not password:
-        return [tool]
+    if _get_password_from_env():
+        _enable_paramiko(logger)
 
-    sshpass_path = shutil.which("sshpass")
-    if sshpass_path:
-        return [sshpass_path, "-p", password, tool]
-
-    if os.name == "nt" and _enable_paramiko(logger):
-        return [tool]
-
-    global _warned_password_tool
-    if not _warned_password_tool:
-        logger.warning(
-            "Variable d'environnement pwdsession détectée mais sshpass absent, "
-            "retour au comportement interactif. Installez sshpass pour éviter les invites."
-        )
-        _warned_password_tool = True
     return [tool]
 
 
@@ -241,6 +236,7 @@ def run_command(
         logger.info("[%s] %s", label, line.rstrip(), extra={"is_test": mark_as_test})
 
     process.wait()
+    logger.debug("[%s] terminé (rc=%s)", label, process.returncode)
     if process.returncode:
         raise subprocess.CalledProcessError(process.returncode, command)
 
@@ -270,6 +266,7 @@ def run_command_capture(
         for line in result.stderr.splitlines():
             logger.info("[%s] %s", label, line, extra={"is_test": mark_as_test})
 
+    logger.debug("[%s] terminé (rc=%s)", label, result.returncode)
     if result.returncode:
         raise subprocess.CalledProcessError(
             result.returncode, command, output=result.stdout, stderr=result.stderr
@@ -326,6 +323,7 @@ def _run_paramiko_command(
     from io import StringIO
 
     with _open_paramiko_client(host) as client:
+        logger.debug("[%s] paramiko exec: %s", label, command)
         stdin, stdout, stderr = client.exec_command(f"set -euo pipefail; {command}")
         stdout.channel.settimeout(10)
         stderr.channel.settimeout(10)
@@ -361,6 +359,7 @@ def _run_paramiko_command(
             pass
 
         rc = stdout.channel.recv_exit_status()
+        logger.debug("[%s] terminé (rc=%s)", label, rc)
         if rc:
             raise subprocess.CalledProcessError(rc, command)
 
@@ -842,7 +841,9 @@ def sync_self_signed_ca(
 
 def build_and_run(host: str, base_dir: str, repo_name: str, component: str, logger: logging.Logger, self_signed: bool) -> None:
     flags = "--self-signed" if self_signed else ""
-    keep_logs_prefix = "KEEP_CONTAINER_LOGS=true " if component == "client" else ""
+    # Conserver systématiquement les conteneurs pour pouvoir consulter les logs
+    # même si le processus se termine prématurément (ex: crash orchestrateur).
+    keep_logs_prefix = "KEEP_CONTAINER_LOGS=true "
     container_name = "fl-orchestrator" if component == "orchestrator" else "fl-client-dgx"
     remote_cmd = (
         f"cd {quote_path(base_dir)}/{quote(repo_name)} && "
@@ -908,6 +909,38 @@ def assert_container_running(host: str, container: str, logger: logging.Logger) 
         )
 
 
+def orchestrator_network_debug(
+    host: str, server_port: int, server_app_port: int, logger: logging.Logger
+) -> None:
+    """Collecte des diagnostics réseau détaillés sur l'orchestrateur.
+
+    Objectif: comprendre rapidement pourquoi le port attendu n'est pas
+    accessible (conteneur arrêté, port non publié, service non démarré).
+    """
+
+    remote_cmd = "".join(
+        [
+            "docker inspect -f 'State: {{.State.Status}} | Restart: {{json .HostConfig.RestartPolicy}} | Ports: {{json .NetworkSettings.Ports}}' fl-orchestrator || true; ",
+            f"if command -v ss >/dev/null 2>&1; then ss -ltnp | grep -E ':{server_port}|:{server_app_port}' || true; fi; ",
+            "if docker ps -q --filter name=fl-orchestrator >/dev/null 2>&1; then ",
+            "docker exec fl-orchestrator python - <<'PY'\n",
+            "import os, socket\n",
+            "ports = [int(os.getenv('FLOWER_SERVER_PORT', '8080')), int(os.getenv('FLOWER_SERVERAPP_PORT', '9091'))]\n",
+            "for port in ports:\n",
+            "    try:\n",
+            "        with socket.create_connection(('127.0.0.1', port), timeout=3) as sock:\n",
+            "            print(f'[net] écoute interne OK sur {port} via {sock.family.name}')\n",
+            "    except Exception as exc:  # pragma: no cover - diagnostic\n",
+            "        print(f'[net] écoute interne KO sur {port}:', exc)\n",
+            "PY\n",
+            "fi",
+        ]
+    )
+
+    info(logger, "[%s] diagnostic réseau orchestrateur", host)
+    ssh(host, remote_cmd, logger, label="net-debug", mark_as_test=True)
+
+
 def verify_certificates(host: str, base_dir: str, repo_name: str, logger: logging.Logger) -> None:
     """Inspecte en détail CA/serveur/client pour vérifier le SAN et la validité."""
 
@@ -948,35 +981,40 @@ def hub_client_link_diagnostics(
             "server_host=${SERVER_ADDRESS%%:*}; server_port=${SERVER_ADDRESS##*:}; ",
             "ca_file=$(pwd)/certs/ca.crt; ",
             "pybin=$(command -v python3 || command -v python || echo python); ",
+            "echo '[link] résumé réseau local' && hostname -f && date; ",
+            "echo '[link] interfaces:' && (ip -4 addr show || true); ",
+            "echo '[link] routes:' && (ip route show || true); ",
+            "echo '[link] ports écoutés (top 20):' && (ss -ltnp 2>/dev/null | head -n 20 || true); ",
             "echo '[link] cible:' $server_host:$server_port; ",
             "$pybin - <<'PY'\n",
-            "import socket, os\n",
+            "import os, socket, sys\n",
             "target = os.environ.get('SERVER_ADDRESS', '127.0.0.1:8080')\n",
             "host, port = target.rsplit(':', 1)\n",
+            "ok = True\n",
             "try:\n",
             "    infos = socket.getaddrinfo(host, int(port))\n",
             "    unique = sorted({f\"{i[4][0]} ({i[0].name})\" for i in infos})\n",
             "    print('[link] résolutions DNS:', ', '.join(unique))\n",
             "except Exception as exc:  # pragma: no cover - diagnostic\n",
             "    print('[link] échec résolution DNS:', exc)\n",
-            "PY\n",
-            "ping -c 2 -W 2 $server_host || true; ",
-            "$pybin - <<'PY'\n",
-            "import os, socket\n",
-            "target = os.environ.get('SERVER_ADDRESS', '127.0.0.1:8080')\n",
-            "host, port = target.rsplit(':', 1)\n",
+            "    ok = False\n",
             "print(f'[link] tentative TCP vers {target}...')\n",
             "try:\n",
             "    with socket.create_connection((host, int(port)), timeout=5) as sock:\n",
             "        print('[link] TCP OK via', sock.family, 'proto', sock.proto)\n",
             "except Exception as exc:  # pragma: no cover - diagnostic\n",
             "    print('[link] TCP échec:', type(exc).__name__, exc)\n",
+            "    ok = False\n",
+            "sys.exit(0 if ok else 13)\n",
             "PY\n",
+            "tcp_status=$?; ",
+            "ping -c 2 -W 2 $server_host || true; ",
             "if command -v openssl >/dev/null 2>&1; then ",
             "  echo '[link] vérification TLS openssl'; ",
             "  openssl s_client -connect \"$server_host:$server_port\" -CAfile \"$ca_file\" ",
             "-servername \"$server_host\" -verify_return_error -brief </dev/null || true; ",
-            "fi",
+            "fi; ",
+            "if [ \"$tcp_status\" -ne 0 ]; then exit $tcp_status; fi",
         ]
     )
 
@@ -1203,6 +1241,12 @@ def main() -> None:
     logger = setup_logger(log_file)
     info(logger, "Journal détaillé : %s", log_file)
 
+    if _get_password_from_env():
+        _enable_paramiko(logger)
+    elif os.name == "nt":
+        # Sur Windows on privilégie Paramiko pour éviter les surprises avec ssh.exe
+        _enable_paramiko(logger)
+
     try:
         # 0bis) Sélection du port serveur (évite les conflits sur 443)
         server_port = find_available_port(args.proxy_host, args.server_port, logger)
@@ -1245,6 +1289,7 @@ def main() -> None:
         # 3) Build + run
         build_and_run(args.proxy_host, proxy_base, repo_name, "orchestrator", logger, args.self_signed)
         assert_container_running(args.proxy_host, "fl-orchestrator", logger)
+        orchestrator_network_debug(args.proxy_host, server_port, server_app_port, logger)
         if args.self_signed:
             sync_self_signed_ca(
                 proxy_host=args.proxy_host,
