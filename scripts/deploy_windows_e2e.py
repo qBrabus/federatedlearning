@@ -815,15 +815,18 @@ def sync_self_signed_ca(
             logger,
             label="prepare cert dir",
         )
+        dgx_ca_crt = f"{dgx_repo}/certs/ca.crt"
+        dgx_ca_key = f"{dgx_repo}/certs/ca.key"
+
         scp(
             str(local_ca_crt),
-            f"{dgx_host}:{scp_quote_remote(f"{dgx_repo}/certs/ca.crt")}",
+            f"{dgx_host}:{scp_quote_remote(dgx_ca_crt)}",
             logger,
             label="push ca.crt",
         )
         scp(
             str(local_ca_key),
-            f"{dgx_host}:{scp_quote_remote(f"{dgx_repo}/certs/ca.key")}",
+            f"{dgx_host}:{scp_quote_remote(dgx_ca_key)}",
             logger,
             label="push ca.key",
         )
