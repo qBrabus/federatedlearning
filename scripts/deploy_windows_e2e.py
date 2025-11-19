@@ -29,8 +29,10 @@ import subprocess
 import sys
 import tempfile
 import socket
+import textwrap
 from pathlib import Path
 from typing import Iterable
+from string import Template
 
 DEFAULT_REPO_URL = "https://github.com/qBrabus/federatedlearning"
 DEFAULT_PROXY_HOST = "PROXY"
@@ -750,7 +752,7 @@ def select_server_endpoint(
         port_candidates.append(8443)
 
     fallback_start = 1024 if requested_port < 1024 else requested_port + 1
-    for port in range(fallback_start, fallback_start + 20):
+    for port in range(fallback_start, fallback_start + 100):
         if port not in port_candidates:
             port_candidates.append(port)
 
@@ -793,7 +795,9 @@ def find_available_port(host: str, requested_port: int, logger: logging.Logger) 
     """
 
     info(logger, "[%s] vérification du port %s", host, requested_port)
-    remote_cmd = rf"""
+    remote_cmd = Template(
+        textwrap.dedent(
+            r"""
 python_cmd=$(command -v python3 || command -v python || true)
 if [ -z "$python_cmd" ]; then
   echo "Python est requis pour détecter les ports libres" >&2
@@ -806,7 +810,7 @@ import socket
 import sys
 from typing import Optional
 
-requested = {requested_port}
+requested = $requested_port
 preferred: list[int] = []
 
 # Toujours commencer par le port demandé
@@ -818,7 +822,7 @@ if requested == 443:
 
 # Ensuite, préférer une plage non privilégiée pour éviter les blocages ACL
     fallback_start = 1024 if requested < 1024 else requested + 1
-    for port in range(fallback_start, fallback_start + 200):
+    for port in range(fallback_start, fallback_start + 400):
         if port not in preferred:
             preferred.append(port)
 
@@ -829,13 +833,13 @@ def is_free(port: int) -> bool:
     if port < 1024:
         # Se contenter d'une connexion sortante pour éviter EACCES sur bind().
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-            s.settimeout(0.5)
+            s.settimeout(0.2)
             result = s.connect_ex(("127.0.0.1", port))
             return result != 0  # ECONNREFUSED => libre
 
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
         s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-        s.settimeout(0.5)
+        s.settimeout(0.2)
         try:
             s.bind(("0.0.0.0", port))
         except OSError as exc:  # port in use or privilégié
@@ -856,7 +860,7 @@ def find_first_available(candidates: list[int]) -> Optional[int]:
     results: dict[int, bool] = {}
 
     with concurrent.futures.ThreadPoolExecutor(
-        max_workers=min(32, len(candidates))
+        max_workers=min(64, len(candidates))
     ) as executor:
         future_to_port = {executor.submit(is_free, port): port for port in candidates}
 
@@ -888,6 +892,8 @@ print("Aucun port libre trouvé", file=sys.stderr)
 sys.exit(1)
 PY
 """
+        )
+    ).substitute(requested_port=requested_port)
 
     output = ssh_capture(host, remote_cmd, logger, label="port-check")
     try:
