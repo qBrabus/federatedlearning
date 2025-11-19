@@ -8,8 +8,12 @@ Docker associées puis efface le dépôt cloné sur chaque machine distante.
 from __future__ import annotations
 
 import argparse
+import os
 import shlex
 import subprocess
+from pathlib import Path
+
+import paramiko
 
 DEFAULT_PROXY_HOST = "PROXY"
 DEFAULT_DGX_HOST = "DGX"
@@ -18,16 +22,121 @@ DEFAULT_DGX_BASE = "/raid/workspace/qladane/federated"
 DEFAULT_REPO_NAME = "federatedlearning"
 
 
+_PASSWORD_ENV_VARS = ("pwdsession", "PWDSSESSION", "PWDSESSION")
+_DEFAULT_PORT = 22
+
+
 def info(message: str) -> None:
     print(f"[cleanup] {message}")
 
 
-def run_command(command: list[str]) -> None:
-    subprocess.run(command, check=True)
+def _load_ssh_config() -> paramiko.SSHConfig | None:
+    config_path = Path.home() / ".ssh" / "config"
+    if not config_path.exists():
+        return None
+
+    config = paramiko.SSHConfig()
+    with config_path.open("r", encoding="utf-8", errors="replace") as fh:
+        config.parse(fh)
+    return config
+
+
+def _resolve_ssh_params(host: str) -> tuple[str, str | None, int, list[str]]:
+    """Résout les paramètres SSH depuis ~/.ssh/config et host@user."""
+
+    username: str | None = None
+    hostname = host
+    port = _DEFAULT_PORT
+    key_files: list[str] = []
+
+    if "@" in host:
+        user, sep, h = host.partition("@")
+        if sep:
+            username, hostname = user, h
+
+    config = _load_ssh_config()
+    if config is not None:
+        lookup = config.lookup(host)
+        hostname = lookup.get("hostname", hostname)
+        username = lookup.get("user", username)
+        if "port" in lookup:
+            try:
+                port = int(lookup["port"])
+            except ValueError:
+                port = _DEFAULT_PORT
+        if "identityfile" in lookup:
+            key_files = lookup["identityfile"]
+
+    return hostname, username, port, key_files
+
+
+def _get_password_from_env() -> str:
+    for key in _PASSWORD_ENV_VARS:
+        value = os.environ.get(key)
+        if value:
+            return value
+    return ""
+
+
+def _open_paramiko_client(host: str) -> paramiko.SSHClient:
+    hostname, username, port, key_files = _resolve_ssh_params(host)
+    password = _get_password_from_env() or None
+
+    client = paramiko.SSHClient()
+    client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+    info(
+        "connexion paramiko -> %s (user=%s, port=%s, keys=%s)",
+        hostname,
+        username or "<défaut>",
+        port,
+        ",".join(key_files) if key_files else "<ssh-agent/def>",
+    )
+    client.connect(
+        hostname=hostname,
+        port=port,
+        username=username,
+        password=password,
+        look_for_keys=True,
+        allow_agent=True,
+        key_filename=key_files or None,
+        timeout=15,
+    )
+    return client
+
+
+def _ssh_via_paramiko(host: str, command: str) -> None:
+    with _open_paramiko_client(host) as client:
+        info("[%s] exécution distante: %s", host, command)
+        stdin, stdout, stderr = client.exec_command(f"set -euo pipefail; {command}")
+        stdout.channel.settimeout(15)
+        stderr.channel.settimeout(15)
+
+        for line in stdout:
+            info("[%s] %s", host, line.rstrip("\n"))
+        for line in stderr:
+            info("[%s] %s", host, line.rstrip("\n"))
+
+        rc = stdout.channel.recv_exit_status()
+        if rc:
+            raise subprocess.CalledProcessError(rc, command)
 
 
 def ssh(host: str, command: str) -> None:
-    run_command(["ssh", host, f"set -euo pipefail; {command}"])
+    """Évalue une commande distante via Paramiko (mot de passe/env), sinon ssh."""
+
+    password = _get_password_from_env()
+    if password:
+        try:
+            _ssh_via_paramiko(host, command)
+            return
+        except paramiko.ssh_exception.SSHException as exc:
+            info(f"[{host}] échec Paramiko ({exc}), tentative via ssh binaire")
+
+    info(f"[{host}] exécution via ssh binaire")
+    subprocess.run(
+        ["ssh", host, f"set -euo pipefail; {command}"],
+        check=True,
+    )
 
 
 def quote(value: str) -> str:
