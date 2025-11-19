@@ -639,6 +639,65 @@ CLIENT_KEY_PATH=/certs/client.key
     ssh(host, remote_cmd, logger)
 
 
+def _list_proxy_addresses(proxy_host: str, logger: logging.Logger) -> list[str]:
+    """Retourne les adresses IPv4 connues du proxy (hors loopback)."""
+
+    cmd = "hostname -I 2>/dev/null || true"
+    output = ssh_capture(proxy_host, cmd, logger, label="hostname -I")
+    addresses = []
+    for token in output.split():
+        if re.match(r"^\d+\.\d+\.\d+\.\d+$", token) and token != "127.0.0.1":
+            addresses.append(token)
+    return addresses
+
+
+def _is_reachable_from_dgx(
+    dgx_host: str, target_host: str, target_port: int, logger: logging.Logger
+) -> bool:
+    """Teste une connexion TCP depuis le DGX vers la cible."""
+
+    script = rf"""
+python - <<'PY'
+import socket, sys
+host = {target_host!r}
+port = {target_port}
+try:
+    with socket.create_connection((host, port), timeout=3):
+        sys.exit(0)
+except Exception as exc:  # pragma: no cover - diagnostic
+    print(exc)
+    sys.exit(1)
+PY
+"""
+
+    try:
+        ssh(dgx_host, script, logger, label="tcp-probe", mark_as_test=True)
+        return True
+    except subprocess.CalledProcessError:
+        return False
+
+
+def select_server_host(
+    proxy_host: str, dgx_host: str, server_port: int, logger: logging.Logger
+) -> str:
+    """Choisit l'adresse du proxy joignable depuis le DGX."""
+
+    proxy_hostname, _, _, _ = _resolve_ssh_params(proxy_host)
+    candidates: list[str] = [proxy_hostname]
+    for addr in _list_proxy_addresses(proxy_host, logger):
+        if addr not in candidates:
+            candidates.append(addr)
+
+    info(logger, "[%s] tentative de sélection de l'adresse proxy joignable", dgx_host)
+    for candidate in candidates:
+        if _is_reachable_from_dgx(dgx_host, candidate, server_port, logger):
+            info(logger, "[%s] adresse %s joignable, utilisation", dgx_host, candidate)
+            return candidate
+
+    info(logger, "[%s] aucune adresse joignable trouvée, utilisation de %s", dgx_host, proxy_hostname)
+    return proxy_hostname
+
+
 def find_available_port(host: str, requested_port: int, logger: logging.Logger) -> int:
     """Retourne un port TCP disponible sur l'hôte cible.
 
@@ -1251,12 +1310,12 @@ def main() -> None:
         # 0bis) Sélection du port serveur (évite les conflits sur 443)
         server_port = find_available_port(args.proxy_host, args.server_port, logger)
 
-        # Hostname résolu pour le client (évite les alias SSH non résolus côté DGX)
-        proxy_hostname, _, _, _ = _resolve_ssh_params(args.proxy_host)
-
         # 0) Prérequis (Git + Docker)
         ensure_prerequisites(args.proxy_host, logger)
         ensure_prerequisites(args.dgx_host, logger)
+
+        # Choix de l'adresse proxy réellement accessible depuis le DGX
+        server_host = select_server_host(args.proxy_host, args.dgx_host, server_port, logger)
 
         # 1) Connectivité SSH + Git clone/pull
         clone_or_pull(args.proxy_host, proxy_base, args.repo_url, repo_name, logger)
@@ -1283,7 +1342,7 @@ def main() -> None:
             server_port,
             logger,
             server_app_port=server_app_port,
-            server_host=proxy_hostname,
+            server_host=server_host,
         )
 
         # 3) Build + run
@@ -1331,8 +1390,8 @@ def main() -> None:
         repo_name,
         dgx_base,
         repo_name,
-        args.proxy_host,
-        server_app_port,
+        server_host,
+        server_port,
     )
 
 
