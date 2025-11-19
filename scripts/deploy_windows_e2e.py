@@ -734,10 +734,10 @@ def select_server_endpoint(
     """Choisit (hôte, port) joignables depuis le DGX avec repli automatique.
 
     On privilégie le port demandé, puis 8443 lorsqu'on part de 443, avant de
-    tester une courte plage non privilégiée pour éviter les ports filtrés.
-    Chaque port candidat est d'abord vérifié côté proxy (libre ou port de
-    remplacement) puis testé depuis le DGX en acceptant ``ECONNREFUSED`` comme
-    indicateur de chemin réseau ouvert.
+    balayer l'ensemble de la plage utilisateur (20-65535) pour maximiser les
+    chances de trouver un port ouvert. Chaque port candidat est d'abord vérifié
+    côté proxy (libre ou port de remplacement) puis testé depuis le DGX en
+    acceptant ``ECONNREFUSED`` comme indicateur de chemin réseau ouvert.
     """
 
     proxy_hostname, _, _, _ = _resolve_ssh_params(proxy_host)
@@ -746,14 +746,20 @@ def select_server_endpoint(
         if addr not in host_candidates:
             host_candidates.append(addr)
 
-    port_candidates: list[int] = [requested_port]
-    if requested_port == 443 and 8443 not in port_candidates:
-        port_candidates.append(8443)
+    port_candidates: list[int] = []
+    seen_ports: set[int] = set()
 
-    fallback_start = 1024 if requested_port < 1024 else requested_port + 1
-    for port in range(fallback_start, fallback_start + 100):
-        if port not in port_candidates:
+    def add_candidate(port: int) -> None:
+        if 20 <= port <= 65535 and port not in seen_ports:
+            seen_ports.add(port)
             port_candidates.append(port)
+
+    add_candidate(requested_port)
+    if requested_port == 443:
+        add_candidate(8443)
+
+    for port in range(20, 65536):
+        add_candidate(port)
 
     tested_pairs: set[tuple[str, int]] = set()
 
@@ -787,10 +793,9 @@ def select_server_endpoint(
 def find_available_port(host: str, requested_port: int, logger: logging.Logger) -> int:
     """Retourne un port TCP disponible sur l'hôte cible.
 
-    Le port demandé est privilégié. Si celui-ci est occupé, on privilégie un
-    port non privilégié (>=1024) afin de limiter les risques de filtrage sur
-    les ports bas. Quand 443 est indisponible, on teste 8443 avant de balayer
-    une courte plage de secours.
+    Le port demandé est privilégié. Si celui-ci est occupé, on balaye ensuite
+    l'ensemble de la plage 20-65535 (en priorisant 8443 après 443) afin d'accélérer
+    la détection d'un port libre même dans les environnements fortement filtrés.
     """
 
     info(logger, "[%s] vérification du port %s", host, requested_port)
@@ -811,19 +816,25 @@ from typing import Optional
 
 requested = $requested_port
 preferred: list[int] = []
+seen: set[int] = set()
+
+
+def add_candidate(port: int) -> None:
+    if 20 <= port <= 65535 and port not in seen:
+        seen.add(port)
+        preferred.append(port)
+
 
 # Toujours commencer par le port demandé
-preferred.append(requested)
+add_candidate(requested)
 
 # Alternative « sûre » si 443 est déjà pris
 if requested == 443:
-    preferred.append(8443)
+    add_candidate(8443)
 
-# Ensuite, préférer une plage non privilégiée pour éviter les blocages ACL
-    fallback_start = 1024 if requested < 1024 else requested + 1
-    for port in range(fallback_start, fallback_start + 400):
-        if port not in preferred:
-            preferred.append(port)
+# Balayer ensuite toute la plage utilisateur
+for port in range(20, 65536):
+    add_candidate(port)
 
 
 def is_free(port: int) -> bool:
@@ -856,12 +867,22 @@ def is_free(port: int) -> bool:
 def find_first_available(candidates: list[int]) -> Optional[int]:
     import concurrent.futures
 
-    results: dict[int, bool] = {}
+    if not candidates:
+        return None
 
-    with concurrent.futures.ThreadPoolExecutor(
-        max_workers=min(64, len(candidates))
-    ) as executor:
-        future_to_port = {executor.submit(is_free, port): port for port in candidates}
+    candidate_iter = iter(candidates)
+    max_workers = min(256, max(8, len(candidates)))
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
+        future_to_port: dict[concurrent.futures.Future[bool], int] = {}
+
+        # Amorcer la file avec un lot initial
+        try:
+            for _ in range(max_workers):
+                port = next(candidate_iter)
+                future_to_port[executor.submit(is_free, port)] = port
+        except StopIteration:
+            pass
 
         while future_to_port:
             done, _ = concurrent.futures.wait(
@@ -871,13 +892,17 @@ def find_first_available(candidates: list[int]) -> Optional[int]:
             for future in done:
                 port = future_to_port.pop(future)
                 try:
-                    results[port] = future.result()
+                    if future.result():
+                        return port
                 except Exception:
-                    results[port] = False
+                    pass
 
-            for port in candidates:
-                if results.get(port):
-                    return port
+                # Remplir la fenêtre de travail si des candidats restent à tester
+                try:
+                    next_port = next(candidate_iter)
+                    future_to_port[executor.submit(is_free, next_port)] = next_port
+                except StopIteration:
+                    continue
 
     return None
 
