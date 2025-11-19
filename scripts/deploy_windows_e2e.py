@@ -640,14 +640,23 @@ CLIENT_KEY_PATH=/certs/client.key
 
 
 def _list_proxy_addresses(proxy_host: str, logger: logging.Logger) -> list[str]:
-    """Retourne les adresses IPv4 connues du proxy (hors loopback)."""
+    """Retourne les adresses IPv4 connues du proxy (hors loopback et réseaux Docker)."""
 
     cmd = "hostname -I 2>/dev/null || true"
     output = ssh_capture(proxy_host, cmd, logger, label="hostname -I")
     addresses = []
     for token in output.split():
-        if re.match(r"^\d+\.\d+\.\d+\.\d+$", token) and token != "127.0.0.1":
-            addresses.append(token)
+        if not re.match(r"^\d+\.\d+\.\d+\.\d+$", token):
+            continue
+        # Exclure localhost et les réseaux docker0 les plus courants pour éviter de
+        # sélectionner l'IP interne du conteneur plutôt qu'une adresse LAN joignable.
+        if (
+            token.startswith("127.")
+            or token.startswith("172.17.")
+            or token.startswith("172.18.")
+        ):
+            continue
+        addresses.append(token)
     return addresses
 
 
