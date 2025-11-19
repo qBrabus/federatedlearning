@@ -26,8 +26,11 @@ _PASSWORD_ENV_VARS = ("pwdsession", "PWDSSESSION", "PWDSESSION")
 _DEFAULT_PORT = 22
 
 
-def info(message: str) -> None:
-    print(f"[cleanup] {message}")
+def info(message: str, *args: object) -> None:
+    """Affiche un message formaté avec le préfixe cleanup."""
+
+    formatted = message % args if args else message
+    print(f"[cleanup] {formatted}")
 
 
 def _load_ssh_config() -> paramiko.SSHConfig | None:
