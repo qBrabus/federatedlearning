@@ -701,9 +701,10 @@ def select_server_host(
 def find_available_port(host: str, requested_port: int, logger: logging.Logger) -> int:
     """Retourne un port TCP disponible sur l'hôte cible.
 
-    Le port demandé est privilégié. En cas d'indisponibilité, on cherche le
-    prochain port libre dans une petite fenêtre (50 ports) afin d'éviter les
-    conflits, notamment avec des services déjà liés à 443.
+    Le port demandé est privilégié. Si celui-ci est occupé, on privilégie un
+    port non privilégié (>=1024) afin de limiter les risques de filtrage sur
+    les ports bas. Quand 443 est indisponible, on teste 8443 avant de balayer
+    une courte plage de secours.
     """
 
     info(logger, "[%s] vérification du port %s", host, requested_port)
@@ -719,12 +720,25 @@ import errno
 import socket
 import sys
 
-preferred = {requested_port}
-max_port = preferred + 50
+requested = {requested_port}
+preferred: list[int] = []
+
+# Toujours commencer par le port demandé
+preferred.append(requested)
+
+# Alternative « sûre » si 443 est déjà pris
+if requested == 443:
+    preferred.append(8443)
+
+# Ensuite, préférer une plage non privilégiée pour éviter les blocages ACL
+fallback_start = 1024 if requested < 1024 else requested + 1
+for port in range(fallback_start, fallback_start + 50):
+    if port not in preferred:
+        preferred.append(port)
 
 
 def is_free(port: int) -> bool:
-    '''Teste la disponibilité sans nécessiter de privilèges root pour <1024.'''
+    """Teste la disponibilité sans nécessiter de privilèges root pour <1024."""
 
     if port < 1024:
         # Se contenter d'une connexion sortante pour éviter EACCES sur bind().
@@ -743,20 +757,18 @@ def is_free(port: int) -> bool:
                 errno.EADDRNOTAVAIL,
             ):
                 return False
-            return False
+            raise
+
     return True
 
 
-chosen = None
-for port in range(preferred, max_port + 1):
-    if is_free(port):
-        chosen = port
-        break
+for candidate in preferred:
+    if is_free(candidate):
+        print(candidate)
+        sys.exit(0)
 
-if chosen is None:
-    sys.exit("Aucun port libre trouvé")
-
-print(chosen)
+print("Aucun port libre trouvé", file=sys.stderr)
+sys.exit(1)
 PY
 """
 
