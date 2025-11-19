@@ -677,7 +677,7 @@ fi
 import errno, socket, sys
 host = {target_host!r}
 port = {target_port}
-accept_conn_refused = {str(accept_conn_refused).lower()}
+accept_conn_refused = {accept_conn_refused!r}
 try:
     with socket.create_connection((host, port), timeout=3):
         sys.exit(0)
