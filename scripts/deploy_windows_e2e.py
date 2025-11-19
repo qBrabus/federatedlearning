@@ -657,7 +657,13 @@ def _is_reachable_from_dgx(
     """Teste une connexion TCP depuis le DGX vers la cible."""
 
     script = rf"""
-python - <<'PY'
+pybin=$(command -v python3 || command -v python || true)
+if [ -z "$pybin" ]; then
+  echo "python3/python introuvable pour le test TCP" >&2
+  exit 1
+fi
+
+"$pybin" - <<'PY'
 import socket, sys
 host = {target_host!r}
 port = {target_port}
