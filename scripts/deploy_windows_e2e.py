@@ -1272,6 +1272,63 @@ def assert_container_running(host: str, container: str, logger: logging.Logger) 
         )
 
 
+def wait_for_ports(
+    host: str, ports: Iterable[int], logger: logging.Logger, timeout: int = 60
+) -> None:
+    """Patiente jusqu'à ce que les ports écoutent côté proxy.
+
+    Les tests réseau suivants échouent si le service Flower n'a pas encore
+    démarré. On boucle pendant ``timeout`` secondes en réessayant chaque port
+    toutes les secondes afin de laisser le temps au conteneur orchestrateur de
+    publier ses sockets.
+    """
+
+    port_list = list(ports)
+    wait_script = textwrap.dedent(
+        r"""
+python_cmd=$(command -v python3 || command -v python || true)
+if [ -z "$python_cmd" ]; then
+  echo "python requis pour attendre l'ouverture des ports" >&2
+  exit 1
+fi
+
+end=$((SECONDS + {timeout}))
+ports=({ports})
+
+while [ $SECONDS -lt $end ]; do
+  all_up=true
+  for p in "${ports[@]}"; do
+    if "$python_cmd" - <<PY
+import socket, sys
+try:
+    with socket.create_connection(("127.0.0.1", int(sys.argv[1])), timeout=1):
+        sys.exit(0)
+except OSError:
+    sys.exit(1)
+PY
+    "$p"; then
+      echo "[wait] port $p actif"
+    else
+      all_up=false
+      echo "[wait] port $p encore fermé"
+    fi
+  done
+
+  if [ "$all_up" = true ]; then
+    exit 0
+  fi
+
+  sleep 1
+done
+
+echo "[wait] délai dépassé, ports toujours fermés" >&2
+exit 2
+"""
+    ).format(timeout=timeout, ports=" ".join(str(p) for p in port_list))
+
+    ssh(host, wait_script, logger, label="wait-ports", mark_as_test=True)
+
+
 def orchestrator_network_debug(
     host: str, server_port: int, server_app_port: int, logger: logging.Logger
 ) -> None:
@@ -1566,17 +1623,31 @@ def tail_logs(host: str, container: str, logger: logging.Logger, lines: int = 20
         )
 
 
-def stop_containers(hosts: Iterable[str], logger: logging.Logger) -> None:
-    for host in hosts:
-        ssh(
-            host,
-            "docker stop fl-orchestrator >/dev/null 2>&1 || true; "
-            "docker stop fl-client-dgx >/dev/null 2>&1 || true; "
-            "docker rm -f fl-orchestrator >/dev/null 2>&1 || true; "
-            "docker rm -f fl-client-dgx >/dev/null 2>&1 || true",
-            logger,
-            label=f"stop {host}",
+def cleanup_hosts(
+    hosts: Iterable[tuple[str, str]], repo_name: str, logger: logging.Logger
+) -> None:
+    """Arrête et supprime les conteneurs/images puis efface le dépôt cloné.
+
+    Le build e2e laisse des traces (conteneurs arrêtés, images fl-* et dépôt
+    cloné). On s'assure de tout nettoyer pour retrouver l'état initial des
+    machines, même en cas d'échec.
+    """
+
+    for host, base_dir in hosts:
+        repo_path = build_remote_repo_path(base_dir, repo_name)
+        cleanup_cmd = (
+            # Conteneurs éventuels (run + conteneurs de test)
+            "containers=$(docker ps -aq --filter \"name=fl-orchestrator\" --filter \"name=fl-client-dgx\"); "
+            "if [ -n \"$containers\" ]; then docker rm -f $containers >/dev/null 2>&1 || true; fi; "
+            # Images locales construites par le PoC
+            "images=$(docker images --format '{{.Repository}}:{{.Tag}}' | grep '^fl-' || true); "
+            "if [ -n \"$images\" ]; then docker rmi -f $images >/dev/null 2>&1 || true; fi; "
+            # Dépôt cloné + certificats/données générés durant l'exécution
+            f"rm -rf {quote_path(repo_path)}"
         )
+
+        info(logger, "[%s] nettoyage complet (conteneurs, images, dépôt)", host)
+        ssh(host, cleanup_cmd, logger, label=f"cleanup {host}")
 
 
 def parse_args() -> argparse.Namespace:
@@ -1659,6 +1730,7 @@ def main() -> None:
         # 3) Build + run
         build_and_run(proxy_host, proxy_base, repo_name, "orchestrator", logger, args.self_signed)
         assert_container_running(proxy_host, "fl-orchestrator", logger)
+        wait_for_ports(proxy_host, [server_port, server_app_port], logger)
         orchestrator_network_debug(proxy_host, server_port, server_app_port, logger)
         if args.self_signed:
             sync_self_signed_ca(
@@ -1684,13 +1756,13 @@ def main() -> None:
         tail_logs(proxy_host, "fl-orchestrator", logger)
         tail_logs(dgx_host, "fl-client-dgx", logger)
 
-        info(logger, "Tests terminés avec succès. Arrêt des conteneurs...")
+        info(logger, "Tests terminés avec succès. Nettoyage...")
     except Exception as exc:  # noqa: BLE001
         logger.error("Échec du déploiement/validation: %s", exc)
-        stop_containers([args.proxy_host, args.dgx_host], logger)
+        cleanup_hosts([(args.proxy_host, proxy_base), (args.dgx_host, dgx_base)], repo_name, logger)
         sys.exit(1)
 
-    stop_containers([args.proxy_host, args.dgx_host], logger)
+    cleanup_hosts([(args.proxy_host, proxy_base), (args.dgx_host, dgx_base)], repo_name, logger)
 
     info(
         logger,
