@@ -148,15 +148,23 @@ def quote(value: str) -> str:
 
 def cleanup_host(host: str, base_dir: str, repo_name: str) -> None:
     repo_path = f"{base_dir}/{repo_name}"
+    certs_path = f"{base_dir}/certs"
+    data_path = f"{base_dir}/data"
     remote_cmd = (
         # Supprime tous les conteneurs Flower (y compris les variantes -e2e)
         "containers=$(docker ps -aq --filter \"name=fl-orchestrator\" --filter \"name=fl-client-dgx\"); "
         "if [ -n \"$containers\" ]; then docker rm -f $containers >/dev/null 2>&1 || true; fi; "
         # Supprime toutes les images construites localement pour le PoC
         "images=$(docker images --format '{{.Repository}}:{{.Tag}}' | grep '^fl-' || true); "
-        "if [ -n \"$images\" ]; then docker rmi -f $images >/dev/null 2>&1 || true; fi; "
+        "dangling=$(docker images -f 'dangling=true' --format '{{.ID}}' | tr '\n' ' '); "
+        "if [ -n \"$images$dangling\" ]; then docker rmi -f $images $dangling >/dev/null 2>&1 || true; fi; "
+        # Supprime les réseaux/volumes nommés fl- (ex: restes d'anciens runs)
+        "networks=$(docker network ls --format '{{.Name}}' | grep '^fl-' || true); "
+        "if [ -n \"$networks\" ]; then docker network rm $networks >/dev/null 2>&1 || true; fi; "
+        "volumes=$(docker volume ls --format '{{.Name}}' | grep '^fl-' || true); "
+        "if [ -n \"$volumes\" ]; then docker volume rm $volumes >/dev/null 2>&1 || true; fi; "
         # Nettoie dépôt/clones, certificats et données générées
-        f"rm -rf {quote(repo_path)}"
+        f"rm -rf {quote(repo_path)} {quote(certs_path)} {quote(data_path)}"
     )
     info(f"{host}: suppression conteneurs/images et dépôt {repo_path}")
     ssh(host, remote_cmd)

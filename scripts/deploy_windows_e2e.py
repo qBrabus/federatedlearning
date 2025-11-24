@@ -30,6 +30,7 @@ import sys
 import tempfile
 import socket
 import textwrap
+import time
 from pathlib import Path
 from typing import Iterable
 
@@ -924,15 +925,51 @@ PY
 
     server_host = select_server_host(proxy_host, dgx_host, requested_port, logger)
 
-    if not _is_reachable_from_dgx(
-        dgx_host, server_host, requested_port, logger, accept_conn_refused=True
-    ):
-        raise RuntimeError(
-            f"Aucune adresse du proxy n'est joignable depuis le DGX sur le port {requested_port}. "
-            "Vérifiez les règles réseau ou choisissez un hôte accessible."
-        )
-
     return server_host, requested_port
+
+
+def wait_for_proxy_port(
+    dgx_host: str,
+    server_host: str,
+    server_port: int,
+    logger: logging.Logger,
+    attempts: int = 6,
+    delay: int = 5,
+) -> None:
+    """Attend que le port de l'orchestrateur devienne joignable depuis le DGX."""
+
+    info(
+        logger,
+        "[%s] attente de l'ouverture du port %s sur %s (tentatives=%s, delai=%ss)",
+        dgx_host,
+        server_port,
+        server_host,
+        attempts,
+        delay,
+    )
+
+    for attempt in range(1, attempts + 1):
+        if _is_reachable_from_dgx(
+            dgx_host, server_host, server_port, logger, accept_conn_refused=False
+        ):
+            info(
+                logger,
+                "[%s] port %s joignable sur %s (tentative %s/%s)",
+                dgx_host,
+                server_port,
+                server_host,
+                attempt,
+                attempts,
+            )
+            return
+
+        if attempt < attempts:
+            time.sleep(delay)
+
+    raise RuntimeError(
+        f"Le port {server_port} sur {server_host} n'est pas joignable depuis {dgx_host} "
+        "après démarrage de l'orchestrateur. Vérifiez le démarrage du service ou le filtrage réseau."
+    )
 
 
 def find_available_port(host: str, requested_port: int, logger: logging.Logger) -> int:
@@ -1659,6 +1696,7 @@ def main() -> None:
         # 3) Build + run
         build_and_run(proxy_host, proxy_base, repo_name, "orchestrator", logger, args.self_signed)
         assert_container_running(proxy_host, "fl-orchestrator", logger)
+        wait_for_proxy_port(dgx_host, server_host, server_port, logger)
         orchestrator_network_debug(proxy_host, server_port, server_app_port, logger)
         if args.self_signed:
             sync_self_signed_ca(
