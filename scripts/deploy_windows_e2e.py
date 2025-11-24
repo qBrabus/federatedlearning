@@ -1026,11 +1026,12 @@ def find_available_port(host: str, requested_port: int, logger: logging.Logger) 
         host,
         requested_port,
     )
-    remote_cmd = textwrap.dedent(
-        rf"""
+    remote_cmd = (
+        textwrap.dedent(
+            """
 python_cmd=$(command -v python3 || command -v python || true)
 if [ -z "$python_cmd" ]; then
-  echo "Python est requis pour vérifier le port {requested_port}" >&2
+  echo "Python est requis pour vérifier le port __PORT__" >&2
   exit 1
 fi
 
@@ -1039,7 +1040,7 @@ import errno
 import socket
 import sys
 
-port = {requested_port}
+port = __PORT__
 try:
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
         s.settimeout(0.5)
@@ -1060,6 +1061,7 @@ print(port)
 sys.exit(0)
 PY
 """
+        ).replace("__PORT__", str(requested_port))
     )
 
     try:
