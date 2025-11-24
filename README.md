@@ -110,7 +110,7 @@ Le script `scripts/deploy_windows_e2e.py` orchestre l'ensemble depuis une machin
 1. Vérifie ou installe **Docker** et **Git** sur chaque hôte cible (via `curl https://get.docker.com | sh` si nécessaire).【F:scripts/deploy_windows_e2e.py†L6-L56】
 2. Clone ou met à jour ce dépôt sur les hôtes (chemins par défaut `~/federated` pour l'orchestrateur, `/raid/workspace/qladane/federated` pour le DGX).【F:scripts/deploy_windows_e2e.py†L20-L33】
 3. Prépare les `.env` à partir des exemples, applique une configuration minimale de test (1 client suffisant, port gRPC configurable, TLS/mTLS activé).
-   - Le port serveur demandé (par défaut 443) est préféré ; s'il est occupé, le script tente automatiquement 8443 puis bascule sur un port non privilégié disponible pour éviter les blocages ACL sur des ports bas.【F:scripts/deploy_windows_e2e.py†L686-L748】【F:scripts/deploy_windows_e2e.py†L1264-L1336】
+   - Le port serveur demandé (par défaut 443) est imposé. Si le port est occupé côté proxy ou filtré depuis le DGX, le script échoue afin de garantir l'usage du port attendu en production.【F:scripts/deploy_windows_e2e.py†L731-L786】【F:scripts/deploy_windows_e2e.py†L1451-L1494】
 4. Construit et lance les conteneurs via `build_docker_FL.sh` et `run_docker_FL.sh`, avec certificats auto-signés optionnels.
 5. Exécute des tests : connectivité SSH, disponibilité Docker, état des conteneurs, handshake gRPC/mTLS depuis le conteneur client, extraction rapide des logs Flower.
 6. Arrête proprement les conteneurs et rappelle les commandes pour relancer manuellement.
