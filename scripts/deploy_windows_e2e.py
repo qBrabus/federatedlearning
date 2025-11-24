@@ -755,34 +755,35 @@ def select_server_endpoint(
     echo "$header"
 
     details=$("$python_cmd" - <<'PY'
-    import errno
-    import socket
-    import sys
-    import platform
+import errno
+import socket
+import sys
+import platform
 
-    port = $requested_port
-    try:
-        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-            s.settimeout(0.5)
-            result = s.connect_ex(("127.0.0.1", port))
-    except OSError as exc:
-        print(
-            f"[local] Erreur système pendant le test de connexion: {exc} "
-            f"(errno={getattr(exc, 'errno', '?')}, platform={platform.system()})"
-        )
-        sys.exit(2)
+port = $requested_port
+try:
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        s.settimeout(0.5)
+        result = s.connect_ex(("127.0.0.1", port))
+except OSError as exc:
+    print(
+        f"[local] Erreur système pendant le test de connexion: {exc} "
+        f"(errno={getattr(exc, 'errno', '?')}, platform={platform.system()})"
+    )
+    sys.exit(2)
 
-    if result == 0:
-        print(f"[local] Port {port} déjà utilisé : un service écoute sur 127.0.0.1")
-        sys.exit(10)
+if result == 0:
+    print(f"[local] Port {port} déjà utilisé : un service écoute sur 127.0.0.1")
+    sys.exit(10)
 
-    if result == errno.EACCES:
-        print(f"[local] Port {port} inaccessible sans privilèges élevés (EACCES)")
-        sys.exit(11)
+if result == errno.EACCES:
+    print(f"[local] Port {port} inaccessible sans privilèges élevés (EACCES)")
+    sys.exit(11)
 
-    print(f"[local] Port {port} disponible : aucune écoute détectée sur 127.0.0.1")
-    sys.exit(0)
-    PY)
+print(f"[local] Port {port} disponible : aucune écoute détectée sur 127.0.0.1")
+sys.exit(0)
+PY
+)
 
     rc=$?
     printf "%s\n" "$details"
@@ -819,15 +820,35 @@ def select_server_endpoint(
                 output_parts.append(str(exc.stderr))
             output = "\n".join(part for part in output_parts if part)
             rc = getattr(exc, "returncode", "?")
-            command_preview = "\n".join(remote_cmd.strip().splitlines()[:5])
+
+            if rc == 10:
+                reason = f"Port {port} déjà utilisé sur {host} (écoute détectée)."
+            elif rc == 11:
+                reason = (
+                    f"Port {port} inaccessible sur {host} : privilèges élevés requis (EACCES)."
+                )
+            elif rc == 2:
+                reason = (
+                    f"Erreur système locale pendant le test de socket sur {host} (voir log ci-dessous)."
+                )
+            elif rc == 1:
+                reason = f"Python manquant sur {host} pour vérifier le port {port}."
+            elif rc == 255:
+                reason = (
+                    f"Connexion SSH vers {host} impossible ou refusée pendant le diagnostic du port {port}."
+                )
+            else:
+                reason = f"Échec du diagnostic du port {port} sur {host} (rc={rc})."
+
+            command_preview = "\n".join(remote_cmd.strip().splitlines()[:8])
             message = textwrap.dedent(
                 f"""
-                [{host}] Port {port} indisponible ou non testable (rc={rc}).
+                [{host}] {reason}
                 Journal du diagnostic SSH (port-check):
                 {output.strip() or '<aucune sortie retournée>'}
                 Aperçu de la commande envoyée (port-check):
                 {command_preview}
-                Vérifiez les processus écoutant sur {port}, les permissions (EACCES) ou libérez le port avant de relancer.
+                Consultez le journal complet pour les commandes SSH exécutées et libérez le port ou ajustez les permissions avant de relancer.
                 """
             ).strip()
             logger.error(message)
