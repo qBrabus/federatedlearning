@@ -19,7 +19,7 @@ COPY app/ app/
 RUN useradd -m flclient && chown -R flclient:flclient ${APP_HOME}
 USER flclient
 
-ENV SERVER_ADDRESS=fl-superlink.institutimagine.org:443 \
+ENV SERVER_ADDRESS=fl-superlink.institutimagine.org:8443 \
     CLIENT_ID=dgx-client \
     N_LOCAL_EPOCHS=1 \
     BATCH_SIZE=64 \
