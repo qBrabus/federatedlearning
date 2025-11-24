@@ -362,7 +362,9 @@ def _run_paramiko_command(
         rc = stdout.channel.recv_exit_status()
         logger.debug("[%s] terminé (rc=%s)", label, rc)
         if rc:
-            raise subprocess.CalledProcessError(rc, command)
+            raise subprocess.CalledProcessError(
+                rc, command, output=output_buf.getvalue(), stderr=err_buf.getvalue()
+            )
 
         return output_buf.getvalue()
 
@@ -816,11 +818,15 @@ def select_server_endpoint(
             if hasattr(exc, "stderr") and exc.stderr:
                 output_parts.append(str(exc.stderr))
             output = "\n".join(part for part in output_parts if part)
+            rc = getattr(exc, "returncode", "?")
+            command_preview = "\n".join(remote_cmd.strip().splitlines()[:5])
             message = textwrap.dedent(
                 f"""
-                [{host}] Port {port} indisponible ou non testable.
+                [{host}] Port {port} indisponible ou non testable (rc={rc}).
                 Journal du diagnostic SSH (port-check):
                 {output.strip() or '<aucune sortie retournée>'}
+                Aperçu de la commande envoyée (port-check):
+                {command_preview}
                 Vérifiez les processus écoutant sur {port}, les permissions (EACCES) ou libérez le port avant de relancer.
                 """
             ).strip()
