@@ -114,7 +114,7 @@ def _resolve_ssh_params(host: str) -> tuple[str, str | None, int, list[str]]:
     """Résout l'hôte, l'utilisateur, le port et les clés depuis ~/.ssh/config."""
 
     username: str | None = None
-    hostname = host
+    hostname = HOST_ALIASES.get(host.upper(), host)
     port = 22
     key_files: list[str] = []
 
@@ -1597,8 +1597,13 @@ def main() -> None:
     args = parse_args()
     repo_name = args.repo_name or repo_name_from_url(args.repo_url)
 
-    proxy_host = _resolve_alias(args.proxy_host)
-    dgx_host = _resolve_alias(args.dgx_host)
+    # On conserve les alias fournis (PROXY/DGX) afin de bénéficier de la
+    # configuration ``~/.ssh/config`` (utilisateur, clé, port). L'alias ne
+    # doit pas être remplacé trop tôt par l'adresse IP sous peine de perdre
+    # ces informations et de retomber sur l'utilisateur par défaut avec
+    # Paramiko, ce qui aboutit à une invite de mot de passe.
+    proxy_host = args.proxy_host
+    dgx_host = args.dgx_host
 
     proxy_base = normalize_remote_path(args.proxy_base)
     dgx_base = normalize_remote_path(args.dgx_base)
