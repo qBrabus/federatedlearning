@@ -731,63 +731,59 @@ def select_server_host(
 def select_server_endpoint(
     proxy_host: str, dgx_host: str, requested_port: int, logger: logging.Logger
 ) -> tuple[str, int]:
-    """Choisit (hôte, port) joignables depuis le DGX avec repli automatique.
+    """Valide l'utilisation stricte du port serveur demandé.
 
-    On privilégie le port demandé, puis 8443 lorsqu'on part de 443, avant de
-    balayer l'ensemble de la plage utilisateur (20-65535) pour maximiser les
-    chances de trouver un port ouvert. Chaque port candidat est d'abord vérifié
-    côté proxy (libre ou port de remplacement) puis testé depuis le DGX en
-    acceptant ``ECONNREFUSED`` comme indicateur de chemin réseau ouvert.
+    Contrairement à la version précédente qui balayant des ports de repli, on
+    impose désormais le port fourni (par défaut 443). Le script échoue si le
+    port est occupé côté proxy ou si aucune adresse du proxy n'est atteignable
+    depuis le DGX sur ce port, afin d'éviter toute dérive en production.
     """
 
-    proxy_hostname, _, _, _ = _resolve_ssh_params(proxy_host)
-    host_candidates: list[str] = [proxy_hostname]
-    for addr in _list_proxy_addresses(proxy_host, logger):
-        if addr not in host_candidates:
-            host_candidates.append(addr)
+    def _ensure_port_available(host: str, port: int) -> None:
+        remote_cmd = (
+            textwrap.dedent(
+                r"""
+    python_cmd=$(command -v python3 || command -v python || true)
+    if [ -z "$python_cmd" ]; then
+      echo "Python est requis pour vérifier la disponibilité du port" >&2
+      exit 1
+    fi
 
-    port_candidates: list[int] = []
-    seen_ports: set[int] = set()
+    "$python_cmd" - <<'PY'
+    import socket
+    import sys
 
-    def add_candidate(port: int) -> None:
-        if 20 <= port <= 65535 and port not in seen_ports:
-            seen_ports.add(port)
-            port_candidates.append(port)
+    port = $requested_port
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        s.settimeout(0.5)
+        result = s.connect_ex(("127.0.0.1", port))
 
-    add_candidate(requested_port)
-    if requested_port == 443:
-        add_candidate(8443)
+    if result == 0:
+        print(f"Port {port} déjà utilisé")
+        sys.exit(1)
 
-    for port in range(20, 65536):
-        add_candidate(port)
+    print(f"Port {port} disponible")
+    sys.exit(0)
+    PY
+                """
+            ).replace("$requested_port", str(port))
+        )
 
-    tested_pairs: set[tuple[str, int]] = set()
+        ssh(host, remote_cmd, logger, label="port-check")
 
-    for candidate in port_candidates:
-        available_port = find_available_port(proxy_host, candidate, logger)
+    _ensure_port_available(proxy_host, requested_port)
 
-        for host in host_candidates:
-            pair = (host, available_port)
-            if pair in tested_pairs:
-                continue
-            tested_pairs.add(pair)
+    server_host = select_server_host(proxy_host, dgx_host, requested_port, logger)
 
-            if _is_reachable_from_dgx(
-                dgx_host, host, available_port, logger, accept_conn_refused=True
-            ):
-                info(
-                    logger,
-                    "[%s] adresse %s joignable sur port %s, utilisation",
-                    dgx_host,
-                    host,
-                    available_port,
-                )
-                return host, available_port
+    if not _is_reachable_from_dgx(
+        dgx_host, server_host, requested_port, logger, accept_conn_refused=True
+    ):
+        raise RuntimeError(
+            f"Aucune adresse du proxy n'est joignable depuis le DGX sur le port {requested_port}. "
+            "Vérifiez les règles réseau ou choisissez un hôte accessible."
+        )
 
-    raise RuntimeError(
-        "Aucun port accessible depuis le DGX après test des ports candidats. "
-        "Vérifiez les règles réseau/firewall ou forcez un port autorisé avec --server-port."
-    )
+    return server_host, requested_port
 
 
 def find_available_port(host: str, requested_port: int, logger: logging.Logger) -> int:
@@ -1466,7 +1462,7 @@ def main() -> None:
         _enable_paramiko(logger)
 
     try:
-        # 0bis) Sélection du port serveur (évite les conflits sur 443) + accessibilité
+        # 0bis) Validation du port serveur (443 imposé) + accessibilité
         server_host, server_port = select_server_endpoint(
             args.proxy_host, args.dgx_host, args.server_port, logger
         )
