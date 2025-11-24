@@ -745,19 +745,30 @@ def select_server_endpoint(
                 r"""
     python_cmd=$(command -v python3 || command -v python || true)
     if [ -z "$python_cmd" ]; then
-      echo "Python est requis pour vérifier la disponibilité du port" >&2
+      echo "[local] Python est requis pour vérifier le port $requested_port (apt-get install -y python3)" >&2
       exit 1
     fi
 
-    "$python_cmd" - <<'PY'
+    header="[local] Diagnostic port $requested_port sur $(hostname -f 2>/dev/null || hostname)"
+    echo "$header"
+
+    details=$("$python_cmd" - <<'PY'
     import errno
     import socket
     import sys
+    import platform
 
     port = $requested_port
-    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-        s.settimeout(0.5)
-        result = s.connect_ex(("127.0.0.1", port))
+    try:
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+            s.settimeout(0.5)
+            result = s.connect_ex(("127.0.0.1", port))
+    except OSError as exc:
+        print(
+            f"[local] Erreur système pendant le test de connexion: {exc} "
+            f"(errno={getattr(exc, 'errno', '?')}, platform={platform.system()})"
+        )
+        sys.exit(2)
 
     if result == 0:
         print(f"[local] Port {port} déjà utilisé : un service écoute sur 127.0.0.1")
@@ -769,18 +780,26 @@ def select_server_endpoint(
 
     print(f"[local] Port {port} disponible : aucune écoute détectée sur 127.0.0.1")
     sys.exit(0)
-    PY
+    PY)
 
     rc=$?
-    if [ $rc -eq 10 ]; then
+    printf "%s\n" "$details"
+
+    if [ $rc -eq 10 ] || [ $rc -eq 11 ] || [ $rc -eq 2 ]; then
+      echo "[local] Collecte d'informations complémentaires (processus écoutant)..."
       if command -v ss >/dev/null 2>&1; then
         echo "[local] Détails des écoutes existantes (ss) :"
         ss -ltnp 2>/dev/null | grep -E ":$requested_port\\b" || echo "[local] Aucun détail trouvé avec ss"
       elif command -v netstat >/dev/null 2>&1; then
         echo "[local] Détails des écoutes existantes (netstat) :"
         netstat -ano 2>/dev/null | grep -E ":$requested_port\\b" || echo "[local] Aucun détail trouvé avec netstat"
+      else
+        echo "[local] Aucun outil (ss/netstat) disponible pour afficher les processus en écoute"
       fi
-      exit 1
+      if command -v lsof >/dev/null 2>&1; then
+        echo "[local] Processus utilisant le port (lsof) :"
+        lsof -iTCP:$requested_port -sTCP:LISTEN || echo "[local] Aucun processus listé par lsof"
+      fi
     fi
 
     exit $rc
@@ -789,12 +808,24 @@ def select_server_endpoint(
         )
 
         try:
-            ssh(host, remote_cmd, logger, label="port-check")
+            ssh_capture(host, remote_cmd, logger, label="port-check")
         except subprocess.CalledProcessError as exc:
-            raise RuntimeError(
-                f"[{host}] Port {port} indisponible ou non testable. Consultez les logs ci-dessus "
-                "pour savoir s'il est déjà utilisé, bloqué ou nécessite des privilèges."
-            ) from exc
+            output_parts: list[str] = []
+            if hasattr(exc, "output") and exc.output:
+                output_parts.append(str(exc.output))
+            if hasattr(exc, "stderr") and exc.stderr:
+                output_parts.append(str(exc.stderr))
+            output = "\n".join(part for part in output_parts if part)
+            message = textwrap.dedent(
+                f"""
+                [{host}] Port {port} indisponible ou non testable.
+                Journal du diagnostic SSH (port-check):
+                {output.strip() or '<aucune sortie retournée>'}
+                Vérifiez les processus écoutant sur {port}, les permissions (EACCES) ou libérez le port avant de relancer.
+                """
+            ).strip()
+            logger.error(message)
+            raise RuntimeError(message) from exc
 
     _ensure_port_available(proxy_host, requested_port)
 
