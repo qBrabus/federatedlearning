@@ -143,10 +143,11 @@ def _open_paramiko_client(host: str):
 
     hostname, username, port, key_files = _resolve_ssh_params(host)
     password = _get_password_from_env() or None
+    logger = logging.getLogger("deploy-win")
 
     client = paramiko.SSHClient()
     client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
-    logging.getLogger("deploy-win").debug(
+    logger.debug(
         "[paramiko] connexion %s (user=%s, port=%s, keys=%s, password=%s)",
         hostname,
         username or "<défaut>",
@@ -154,17 +155,52 @@ def _open_paramiko_client(host: str):
         ",".join(key_files) if key_files else "<ssh-agent/def>",
         "oui" if password else "non",
     )
-    client.connect(
-        hostname=hostname,
-        port=port,
-        username=username,
-        password=password,
-        look_for_keys=True,
-        allow_agent=True,
-        key_filename=key_files or None,
-        timeout=10,
-    )
+    try:
+        client.connect(
+            hostname=hostname,
+            port=port,
+            username=username,
+            password=password,
+            look_for_keys=True,
+            allow_agent=True,
+            key_filename=key_files or None,
+            timeout=10,
+        )
+    except paramiko.AuthenticationException:
+        global _use_paramiko
+
+        logger.error(
+            "Échec d'authentification Paramiko pour %s (user=%s, port=%s). ",
+            hostname,
+            username or "<défaut>",
+            port,
+        )
+        logger.info(
+            "Bascule automatique vers ssh.exe/scp natif afin d'utiliser la configuration OpenSSH existante."
+        )
+        _use_paramiko = False
+        raise
     return client
+
+
+def _fallback_to_system_ssh(error: Exception, logger: logging.Logger, label: str) -> bool:
+    """Permet de repasser sur ssh.exe/scp si Paramiko échoue (ex: clés non chargées)."""
+
+    try:
+        import paramiko
+    except ImportError:  # pragma: no cover - seulement possible si Paramiko supprimé à chaud
+        return False
+
+    if isinstance(error, paramiko.AuthenticationException):
+        logger.warning("[%s] Authentification Paramiko échouée, tentative via ssh.exe", label)
+    elif isinstance(error, paramiko.SSHException):
+        logger.warning("[%s] Erreur Paramiko (%s), tentative via ssh.exe", label, error)
+    else:
+        return False
+
+    global _use_paramiko
+    _use_paramiko = False
+    return True
 
 
 def _ssh_prefix(logger: logging.Logger, tool: str) -> list[str]:
@@ -445,20 +481,25 @@ def ssh(
     mark_as_test: bool = False,
 ) -> None:
     if _use_paramiko:
-        _run_paramiko_command(
-            host,
-            command,
-            logger,
-            label or f"ssh {host}",
-            mark_as_test=mark_as_test,
-        )
-    else:
-        run_command(
-            [*_ssh_prefix(logger, "ssh"), host, f"set -euo pipefail; {command}"],
-            logger,
-            label or f"ssh {host}",
-            mark_as_test=mark_as_test,
-        )
+        try:
+            _run_paramiko_command(
+                host,
+                command,
+                logger,
+                label or f"ssh {host}",
+                mark_as_test=mark_as_test,
+            )
+            return
+        except Exception as exc:  # pragma: no cover - dépend des clés utilisateur
+            if not _fallback_to_system_ssh(exc, logger, label or f"ssh {host}"):
+                raise
+
+    run_command(
+        [*_ssh_prefix(logger, "ssh"), host, f"set -euo pipefail; {command}"],
+        logger,
+        label or f"ssh {host}",
+        mark_as_test=mark_as_test,
+    )
 
 
 def ssh_capture(
@@ -470,14 +511,18 @@ def ssh_capture(
     mark_as_test: bool = False,
 ) -> str:
     if _use_paramiko:
-        return _run_paramiko_command(
-            host,
-            command,
-            logger,
-            label or f"ssh {host}",
-            capture=True,
-            mark_as_test=mark_as_test,
-        )
+        try:
+            return _run_paramiko_command(
+                host,
+                command,
+                logger,
+                label or f"ssh {host}",
+                capture=True,
+                mark_as_test=mark_as_test,
+            )
+        except Exception as exc:  # pragma: no cover - dépend des clés utilisateur
+            if not _fallback_to_system_ssh(exc, logger, label or f"ssh {host}"):
+                raise
 
     return run_command_capture(
         [*_ssh_prefix(logger, "ssh"), host, f"set -euo pipefail; {command}"],
@@ -496,14 +541,19 @@ def scp(
     mark_as_test: bool = False,
 ) -> None:
     if _use_paramiko:
-        _scp_paramiko(source, destination, logger, label)
-    else:
-        run_command(
-            [*_ssh_prefix(logger, "scp"), "-r", source, destination],
-            logger,
-            label,
-            mark_as_test=mark_as_test,
-        )
+        try:
+            _scp_paramiko(source, destination, logger, label)
+            return
+        except Exception as exc:  # pragma: no cover - dépend des clés utilisateur
+            if not _fallback_to_system_ssh(exc, logger, label):
+                raise
+
+    run_command(
+        [*_ssh_prefix(logger, "scp"), "-r", source, destination],
+        logger,
+        label,
+        mark_as_test=mark_as_test,
+    )
 
 
 def quote(value: str) -> str:
