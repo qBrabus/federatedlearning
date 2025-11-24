@@ -750,6 +750,7 @@ def select_server_endpoint(
     fi
 
     "$python_cmd" - <<'PY'
+    import errno
     import socket
     import sys
 
@@ -759,17 +760,41 @@ def select_server_endpoint(
         result = s.connect_ex(("127.0.0.1", port))
 
     if result == 0:
-        print(f"Port {port} déjà utilisé")
-        sys.exit(1)
+        print(f"[local] Port {port} déjà utilisé : un service écoute sur 127.0.0.1")
+        sys.exit(10)
 
-    print(f"Port {port} disponible")
+    if result == errno.EACCES:
+        print(f"[local] Port {port} inaccessible sans privilèges élevés (EACCES)")
+        sys.exit(11)
+
+    print(f"[local] Port {port} disponible : aucune écoute détectée sur 127.0.0.1")
     sys.exit(0)
     PY
+
+    rc=$?
+    if [ $rc -eq 10 ]; then
+      if command -v ss >/dev/null 2>&1; then
+        echo "[local] Détails des écoutes existantes (ss) :"
+        ss -ltnp 2>/dev/null | grep -E ":$requested_port\\b" || echo "[local] Aucun détail trouvé avec ss"
+      elif command -v netstat >/dev/null 2>&1; then
+        echo "[local] Détails des écoutes existantes (netstat) :"
+        netstat -ano 2>/dev/null | grep -E ":$requested_port\\b" || echo "[local] Aucun détail trouvé avec netstat"
+      fi
+      exit 1
+    fi
+
+    exit $rc
                 """
             ).replace("$requested_port", str(port))
         )
 
-        ssh(host, remote_cmd, logger, label="port-check")
+        try:
+            ssh(host, remote_cmd, logger, label="port-check")
+        except subprocess.CalledProcessError as exc:
+            raise RuntimeError(
+                f"[{host}] Port {port} indisponible ou non testable. Consultez les logs ci-dessus "
+                "pour savoir s'il est déjà utilisé, bloqué ou nécessite des privilèges."
+            ) from exc
 
     _ensure_port_available(proxy_host, requested_port)
 
