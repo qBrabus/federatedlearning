@@ -42,6 +42,7 @@ DEFAULT_DGX_BASE = "/raid/workspace/qladane/federated"
 DEFAULT_REPO_NAME = "federatedlearning"
 DEFAULT_SERVER_PORT = 8443
 DEFAULT_SERVER_APP_PORT = 9091
+ALLOWED_PORTS = {DEFAULT_SERVER_PORT, DEFAULT_SERVER_APP_PORT}
 HOST_ALIASES = {
     "PROXY": "10.200.241.101",
     "DGX": "10.200.50.45",
@@ -62,6 +63,30 @@ def _get_password_from_env() -> str:
         if value:
             return value
     return ""
+
+
+def _ensure_paramiko_ready(logger: logging.Logger) -> None:
+    """Active Paramiko dès qu'un mot de passe ou Windows est détecté.
+
+    Sans ce déclenchement anticipé, la première commande SSH pouvait repasser
+    par ``ssh`` système et déclencher une invite interactive malgré la présence
+    de ``pwdsession`` dans l'environnement.
+    """
+
+    global _use_paramiko
+
+    if _use_paramiko:
+        return
+
+    password = _get_password_from_env()
+    if password or os.name == "nt":
+        if not _enable_paramiko(logger):
+            if password:
+                raise RuntimeError(
+                    "Variable pwdsession détectée mais Paramiko indisponible. "
+                    "Installez Paramiko pour éviter toute invite de mot de passe."
+                )
+        return
 
 
 def _resolve_alias(host: str) -> str:
@@ -481,6 +506,8 @@ def ssh(
     *,
     mark_as_test: bool = False,
 ) -> None:
+    _ensure_paramiko_ready(logger)
+
     if _use_paramiko:
         try:
             _run_paramiko_command(
@@ -511,6 +538,8 @@ def ssh_capture(
     *,
     mark_as_test: bool = False,
 ) -> str:
+    _ensure_paramiko_ready(logger)
+
     if _use_paramiko:
         try:
             return _run_paramiko_command(
@@ -541,6 +570,8 @@ def scp(
     *,
     mark_as_test: bool = False,
 ) -> None:
+    _ensure_paramiko_ready(logger)
+
     if _use_paramiko:
         try:
             _scp_paramiko(source, destination, logger, label)
@@ -983,15 +1014,18 @@ def find_available_port(host: str, requested_port: int, logger: logging.Logger) 
     (ServerApp). Le script échoue si le port est occupé ou inaccessible.
     """
 
-    allowed_ports = {DEFAULT_SERVER_PORT, DEFAULT_SERVER_APP_PORT}
-    if requested_port not in allowed_ports:
+    if requested_port not in ALLOWED_PORTS:
         raise ValueError(
-            "Port non autorisé. Seuls %s sont acceptés." % ", ".join(
-                str(p) for p in sorted(allowed_ports)
-            )
+            "Port non autorisé. Seuls %s sont acceptés et aucun fallback ne sera tenté." %
+            ", ".join(str(p) for p in sorted(ALLOWED_PORTS))
         )
 
-    info(logger, "[%s] vérification stricte du port %s", host, requested_port)
+    info(
+        logger,
+        "[%s] vérification stricte du port %s (aucune tentative sur d'autres ports)",
+        host,
+        requested_port,
+    )
     remote_cmd = textwrap.dedent(
         rf"""
 python_cmd=$(command -v python3 || command -v python || true)
