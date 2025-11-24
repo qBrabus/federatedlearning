@@ -39,7 +39,7 @@ DEFAULT_DGX_HOST = "DGX"
 DEFAULT_PROXY_BASE = "~/federated"
 DEFAULT_DGX_BASE = "/raid/workspace/qladane/federated"
 DEFAULT_REPO_NAME = "federatedlearning"
-DEFAULT_SERVER_PORT = 443
+DEFAULT_SERVER_PORT = 8443
 DEFAULT_SERVER_APP_PORT = 9091
 
 LOG_FORMAT_FILE = "%(asctime)s | %(levelname)-8s | %(message)s"
@@ -736,7 +736,7 @@ def select_server_endpoint(
     """Valide l'utilisation stricte du port serveur demandé.
 
     Contrairement à la version précédente qui balayant des ports de repli, on
-    impose désormais le port fourni (par défaut 443). Le script échoue si le
+    impose désormais le port fourni (par défaut 8443). Le script échoue si le
     port est occupé côté proxy ou si aucune adresse du proxy n'est atteignable
     depuis le DGX sur ce port, afin d'éviter toute dérive en production.
     """
@@ -873,7 +873,7 @@ def find_available_port(host: str, requested_port: int, logger: logging.Logger) 
     """Retourne un port TCP disponible sur l'hôte cible.
 
     Le port demandé est privilégié. Si celui-ci est occupé, on balaye ensuite
-    l'ensemble de la plage 20-65535 (en priorisant 8443 après 443) afin d'accélérer
+    l'ensemble de la plage 20-65535 (en priorisant 443 après 8443) afin d'accélérer
     la détection d'un port libre même dans les environnements fortement filtrés.
     """
 
@@ -907,9 +907,9 @@ def add_candidate(port: int) -> None:
 # Toujours commencer par le port demandé
 add_candidate(requested)
 
-# Alternative « sûre » si 443 est déjà pris
-if requested == 443:
-    add_candidate(8443)
+# Alternative « sûre » si 8443 est déjà pris
+if requested == 8443:
+    add_candidate(443)
 
 # Balayer ensuite toute la plage utilisateur
 for port in range(20, 65536):
@@ -1545,7 +1545,7 @@ def main() -> None:
         _enable_paramiko(logger)
 
     try:
-        # 0bis) Validation du port serveur (443 imposé) + accessibilité
+        # 0bis) Validation du port serveur (8443 imposé) + accessibilité
         server_host, server_port = select_server_endpoint(
             args.proxy_host, args.dgx_host, args.server_port, logger
         )

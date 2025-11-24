@@ -70,7 +70,7 @@ Les certificats sont posés en lecture seule (chmod 644) et copiés dans chaque 
 
 1. **Orchestrateur** (ports 8080/9091 par défaut, `HOST_PORT_OVERRIDE` permet d'exposer un autre port) :
    ```bash
-   HOST_PORT_OVERRIDE=443 ./run_docker_FL.sh orchestrator --self-signed --detach
+   HOST_PORT_OVERRIDE=8443 ./run_docker_FL.sh orchestrator --self-signed --detach
    ```
 
 2. **Client DGX** (exige un GPU et le driver NVIDIA) :
@@ -85,7 +85,7 @@ Chaque lancement crée les répertoires `certs/` (si `--self-signed`) et `data/`
 ### Orchestrateur (`orchestrator/.env` chargé par `run_docker_FL.sh`)
 
 - `FLOWER_SERVER_ADDRESS` (défaut `0.0.0.0`)
-- `FLOWER_SERVER_PORT` (défaut `8080`, exemple `443` en production)
+- `FLOWER_SERVER_PORT` (défaut `8080`, exemple `8443` en production)
 - `FLOWER_SERVERAPP_PORT` (API ServerApp optionnelle, défaut `9091`)
 - `GRPC_MAX_MESSAGE_LENGTH` (défaut 512 Mo)
 - `USE_TLS` (`true`/`false`)
@@ -110,7 +110,7 @@ Le script `scripts/deploy_windows_e2e.py` orchestre l'ensemble depuis une machin
 1. Vérifie ou installe **Docker** et **Git** sur chaque hôte cible (via `curl https://get.docker.com | sh` si nécessaire).【F:scripts/deploy_windows_e2e.py†L6-L56】
 2. Clone ou met à jour ce dépôt sur les hôtes (chemins par défaut `~/federated` pour l'orchestrateur, `/raid/workspace/qladane/federated` pour le DGX).【F:scripts/deploy_windows_e2e.py†L20-L33】
 3. Prépare les `.env` à partir des exemples, applique une configuration minimale de test (1 client suffisant, port gRPC configurable, TLS/mTLS activé).
-   - Le port serveur demandé (par défaut 443) est imposé. Si le port est occupé côté proxy ou filtré depuis le DGX, le script échoue afin de garantir l'usage du port attendu en production.【F:scripts/deploy_windows_e2e.py†L731-L786】【F:scripts/deploy_windows_e2e.py†L1451-L1494】
+   - Le port serveur demandé (par défaut 8443) est imposé. Si le port est occupé côté proxy ou filtré depuis le DGX, le script échoue afin de garantir l'usage du port attendu en production.【F:scripts/deploy_windows_e2e.py†L731-L786】【F:scripts/deploy_windows_e2e.py†L1451-L1494】
 4. Construit et lance les conteneurs via `build_docker_FL.sh` et `run_docker_FL.sh`, avec certificats auto-signés optionnels.
 5. Exécute des tests : connectivité SSH, disponibilité Docker, état des conteneurs, handshake gRPC/mTLS depuis le conteneur client, extraction rapide des logs Flower.
 6. Arrête proprement les conteneurs et rappelle les commandes pour relancer manuellement.
@@ -125,7 +125,7 @@ python scripts/deploy_windows_e2e.py \
   --proxy-base "~/federated" \
   --dgx-base "/raid/workspace/qladane/federated" \
   --repo-url "https://github.com/qBrabus/federatedlearning" \
-  --server-port 443 \
+  --server-port 8443 \
   --self-signed
 ```
 
@@ -149,7 +149,7 @@ Si vous avez utilisé `deploy_windows_e2e.py`, les conteneurs sont arrêtés en 
 
 ```bash
 cd ~/federated/federatedlearning && ./run_docker_FL.sh orchestrator --self-signed --detach
-cd /raid/workspace/qladane/federated/federatedlearning && SERVER_ADDRESS=10.200.241.101:443 ./run_docker_FL.sh client --self-signed --detach
+cd /raid/workspace/qladane/federated/federatedlearning && SERVER_ADDRESS=10.200.241.101:8443 ./run_docker_FL.sh client --self-signed --detach
 ```
 
 ## Conseils TLS/mTLS
