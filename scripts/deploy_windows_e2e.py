@@ -41,6 +41,10 @@ DEFAULT_DGX_BASE = "/raid/workspace/qladane/federated"
 DEFAULT_REPO_NAME = "federatedlearning"
 DEFAULT_SERVER_PORT = 8443
 DEFAULT_SERVER_APP_PORT = 9091
+HOST_ALIASES = {
+    "PROXY": "10.200.241.101",
+    "DGX": "10.200.50.45",
+}
 
 LOG_FORMAT_FILE = "%(asctime)s | %(levelname)-8s | %(message)s"
 LOG_FORMAT_CONSOLE = "%(levelname)-8s | %(message)s"
@@ -57,6 +61,12 @@ def _get_password_from_env() -> str:
         if value:
             return value
     return ""
+
+
+def _resolve_alias(host: str) -> str:
+    """Remplace les alias PROXY/DGX par les IP attendues."""
+
+    return HOST_ALIASES.get(host.upper(), host)
 
 
 def _load_ssh_config() -> "paramiko.SSHConfig | None":
@@ -722,7 +732,13 @@ def select_server_host(
 
     info(logger, "[%s] tentative de sélection de l'adresse proxy joignable", dgx_host)
     for candidate in candidates:
-        if _is_reachable_from_dgx(dgx_host, candidate, server_port, logger):
+        if _is_reachable_from_dgx(
+            dgx_host,
+            candidate,
+            server_port,
+            logger,
+            accept_conn_refused=True,
+        ):
             info(logger, "[%s] adresse %s joignable, utilisation", dgx_host, candidate)
             return candidate
 
@@ -1531,6 +1547,9 @@ def main() -> None:
     args = parse_args()
     repo_name = args.repo_name or repo_name_from_url(args.repo_url)
 
+    proxy_host = _resolve_alias(args.proxy_host)
+    dgx_host = _resolve_alias(args.dgx_host)
+
     proxy_base = normalize_remote_path(args.proxy_base)
     dgx_base = normalize_remote_path(args.dgx_base)
 
@@ -1547,23 +1566,23 @@ def main() -> None:
     try:
         # 0bis) Validation du port serveur (8443 imposé) + accessibilité
         server_host, server_port = select_server_endpoint(
-            args.proxy_host, args.dgx_host, args.server_port, logger
+            proxy_host, dgx_host, args.server_port, logger
         )
 
         # 0) Prérequis (Git + Docker)
-        ensure_prerequisites(args.proxy_host, logger)
-        ensure_prerequisites(args.dgx_host, logger)
+        ensure_prerequisites(proxy_host, logger)
+        ensure_prerequisites(dgx_host, logger)
 
         # 1) Connectivité SSH + Git clone/pull
-        clone_or_pull(args.proxy_host, proxy_base, args.repo_url, repo_name, logger)
-        clone_or_pull(args.dgx_host, dgx_base, args.repo_url, repo_name, logger)
+        clone_or_pull(proxy_host, proxy_base, args.repo_url, repo_name, logger)
+        clone_or_pull(dgx_host, dgx_base, args.repo_url, repo_name, logger)
 
         # 2) .env et valeurs de test minimalistes
-        ensure_env(args.proxy_host, proxy_base, repo_name, "orchestrator/.env", "orchestrator/.env.example", logger)
-        ensure_env(args.dgx_host, dgx_base, repo_name, "client/.env", "client/.env.example", logger)
-        server_app_port = find_available_port(args.proxy_host, DEFAULT_SERVER_APP_PORT, logger)
+        ensure_env(proxy_host, proxy_base, repo_name, "orchestrator/.env", "orchestrator/.env.example", logger)
+        ensure_env(dgx_host, dgx_base, repo_name, "client/.env", "client/.env.example", logger)
+        server_app_port = find_available_port(proxy_host, DEFAULT_SERVER_APP_PORT, logger)
         write_test_env(
-            args.proxy_host,
+            proxy_host,
             proxy_base,
             repo_name,
             "orchestrator",
@@ -1572,7 +1591,7 @@ def main() -> None:
             server_app_port=server_app_port,
         )
         write_test_env(
-            args.dgx_host,
+            dgx_host,
             dgx_base,
             repo_name,
             "client",
@@ -1583,32 +1602,32 @@ def main() -> None:
         )
 
         # 3) Build + run
-        build_and_run(args.proxy_host, proxy_base, repo_name, "orchestrator", logger, args.self_signed)
-        assert_container_running(args.proxy_host, "fl-orchestrator", logger)
-        orchestrator_network_debug(args.proxy_host, server_port, server_app_port, logger)
+        build_and_run(proxy_host, proxy_base, repo_name, "orchestrator", logger, args.self_signed)
+        assert_container_running(proxy_host, "fl-orchestrator", logger)
+        orchestrator_network_debug(proxy_host, server_port, server_app_port, logger)
         if args.self_signed:
             sync_self_signed_ca(
-                proxy_host=args.proxy_host,
+                proxy_host=proxy_host,
                 proxy_base=proxy_base,
-                dgx_host=args.dgx_host,
+                dgx_host=dgx_host,
                 dgx_base=dgx_base,
                 repo_name=repo_name,
                 logger=logger,
             )
-        build_and_run(args.dgx_host, dgx_base, repo_name, "client", logger, args.self_signed)
-        assert_container_running(args.dgx_host, "fl-client-dgx", logger)
+        build_and_run(dgx_host, dgx_base, repo_name, "client", logger, args.self_signed)
+        assert_container_running(dgx_host, "fl-client-dgx", logger)
 
         # 4) Tests
-        check_docker(args.proxy_host, logger)
-        check_docker(args.dgx_host, logger)
-        check_containers(args.proxy_host, logger)
-        check_containers(args.dgx_host, logger)
-        verify_certificates(args.dgx_host, dgx_base, repo_name, logger)
-        hub_client_link_diagnostics(args.dgx_host, dgx_base, repo_name, logger)
-        grpc_smoke_test(args.dgx_host, dgx_base, repo_name, logger)
-        simulate_training_round(args.dgx_host, dgx_base, repo_name, logger)
-        tail_logs(args.proxy_host, "fl-orchestrator", logger)
-        tail_logs(args.dgx_host, "fl-client-dgx", logger)
+        check_docker(proxy_host, logger)
+        check_docker(dgx_host, logger)
+        check_containers(proxy_host, logger)
+        check_containers(dgx_host, logger)
+        verify_certificates(dgx_host, dgx_base, repo_name, logger)
+        hub_client_link_diagnostics(dgx_host, dgx_base, repo_name, logger)
+        grpc_smoke_test(dgx_host, dgx_base, repo_name, logger)
+        simulate_training_round(dgx_host, dgx_base, repo_name, logger)
+        tail_logs(proxy_host, "fl-orchestrator", logger)
+        tail_logs(dgx_host, "fl-client-dgx", logger)
 
         info(logger, "Tests terminés avec succès. Arrêt des conteneurs...")
     except Exception as exc:  # noqa: BLE001
