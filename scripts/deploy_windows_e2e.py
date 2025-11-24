@@ -802,11 +802,15 @@ def select_server_endpoint(
 ) -> tuple[str, int]:
     """Valide l'utilisation stricte du port serveur demandé.
 
-    Contrairement à la version précédente qui balayant des ports de repli, on
-    impose désormais le port fourni (par défaut 8443). Le script échoue si le
+    Seul le port 8443 est autorisé pour l'orchestrateur. Le script échoue si ce
     port est occupé côté proxy ou si aucune adresse du proxy n'est atteignable
     depuis le DGX sur ce port, afin d'éviter toute dérive en production.
     """
+
+    if requested_port != DEFAULT_SERVER_PORT:
+        raise ValueError(
+            f"Port serveur non autorisé ({requested_port}). Utilisez {DEFAULT_SERVER_PORT}."
+        )
 
     def _ensure_port_available(host: str, port: int) -> None:
         remote_cmd = (
@@ -973,20 +977,26 @@ def wait_for_proxy_port(
 
 
 def find_available_port(host: str, requested_port: int, logger: logging.Logger) -> int:
-    """Retourne un port TCP disponible sur l'hôte cible.
+    """Valide la disponibilité du port demandé sans fallback.
 
-    Le port demandé est privilégié. Si celui-ci est occupé, on balaye ensuite
-    l'ensemble de la plage 20-65535 (en priorisant 443 après 8443) afin d'accélérer
-    la détection d'un port libre même dans les environnements fortement filtrés.
+    Les déploiements n'autorisent que les ports 8443 (orchestrateur) et 9091
+    (ServerApp). Le script échoue si le port est occupé ou inaccessible.
     """
 
-    info(logger, "[%s] vérification du port %s", host, requested_port)
-    remote_cmd = (
-        textwrap.dedent(
-            r"""
+    allowed_ports = {DEFAULT_SERVER_PORT, DEFAULT_SERVER_APP_PORT}
+    if requested_port not in allowed_ports:
+        raise ValueError(
+            "Port non autorisé. Seuls %s sont acceptés." % ", ".join(
+                str(p) for p in sorted(allowed_ports)
+            )
+        )
+
+    info(logger, "[%s] vérification stricte du port %s", host, requested_port)
+    remote_cmd = textwrap.dedent(
+        rf"""
 python_cmd=$(command -v python3 || command -v python || true)
 if [ -z "$python_cmd" ]; then
-  echo "Python est requis pour détecter les ports libres" >&2
+  echo "Python est requis pour vérifier le port {requested_port}" >&2
   exit 1
 fi
 
@@ -994,129 +1004,44 @@ fi
 import errno
 import socket
 import sys
-from typing import Optional
 
-requested = $requested_port
-preferred: list[int] = []
-seen: set[int] = set()
-
-
-def add_candidate(port: int) -> None:
-    if 20 <= port <= 65535 and port not in seen:
-        seen.add(port)
-        preferred.append(port)
-
-
-# Toujours commencer par le port demandé
-add_candidate(requested)
-
-# Alternative « sûre » si 8443 est déjà pris
-if requested == 8443:
-    add_candidate(443)
-
-# Balayer ensuite toute la plage utilisateur
-for port in range(20, 65536):
-    add_candidate(port)
-
-
-def is_free(port: int) -> bool:
-    '''Teste la disponibilité sans nécessiter de privilèges root pour <1024.'''
-
-    if port < 1024:
-        # Se contenter d'une connexion sortante pour éviter EACCES sur bind().
-        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-            s.settimeout(0.2)
-            result = s.connect_ex(("127.0.0.1", port))
-            return result != 0  # ECONNREFUSED => libre
-
+port = {requested_port}
+try:
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-        s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-        s.settimeout(0.2)
-        try:
-            s.bind(("0.0.0.0", port))
-        except OSError as exc:  # port in use or privilégié
-            if exc.errno in (
-                errno.EACCES,
-                errno.EADDRINUSE,
-                errno.EADDRNOTAVAIL,
-            ):
-                return False
-            raise
+        s.settimeout(0.5)
+        result = s.connect_ex(("127.0.0.1", port))
+except OSError as exc:
+    print(f"Erreur système pendant le test de connexion: {exc}")
+    sys.exit(2)
 
-    return True
+if result == 0:
+    print(f"Port {port} déjà utilisé : un service écoute sur 127.0.0.1")
+    sys.exit(10)
 
+if result == errno.EACCES:
+    print(f"Port {port} inaccessible sans privilèges élevés (EACCES)")
+    sys.exit(11)
 
-def find_first_available(candidates: list[int]) -> Optional[int]:
-    import concurrent.futures
-
-    if not candidates:
-        return None
-
-    candidate_iter = iter(candidates)
-    max_workers = min(256, max(8, len(candidates)))
-
-    with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
-        future_to_port: dict[concurrent.futures.Future[bool], int] = {}
-
-        # Amorcer la file avec un lot initial
-        try:
-            for _ in range(max_workers):
-                port = next(candidate_iter)
-                future_to_port[executor.submit(is_free, port)] = port
-        except StopIteration:
-            pass
-
-        while future_to_port:
-            done, _ = concurrent.futures.wait(
-                future_to_port, return_when=concurrent.futures.FIRST_COMPLETED
-            )
-
-            for future in done:
-                port = future_to_port.pop(future)
-                try:
-                    if future.result():
-                        return port
-                except Exception:
-                    pass
-
-                # Remplir la fenêtre de travail si des candidats restent à tester
-                try:
-                    next_port = next(candidate_iter)
-                    future_to_port[executor.submit(is_free, next_port)] = next_port
-                except StopIteration:
-                    continue
-
-    return None
-
-
-available_port = find_first_available(preferred)
-if available_port is not None:
-    print(available_port)
-    sys.exit(0)
-
-print("Aucun port libre trouvé", file=sys.stderr)
-sys.exit(1)
+print(port)
+sys.exit(0)
 PY
 """
-        ).replace("$requested_port", str(requested_port))
     )
 
-    output = ssh_capture(host, remote_cmd, logger, label="port-check")
     try:
-        available = int(output.strip().splitlines()[-1])
-    except (ValueError, IndexError) as exc:  # noqa: BLE001
-        raise RuntimeError(f"Port non détecté sur {host}: {output!r}") from exc
+        output = ssh_capture(host, remote_cmd, logger, label="port-check")
+    except subprocess.CalledProcessError as exc:  # noqa: PERF203 - diagnostic explicite
+        raise RuntimeError(
+            f"Port {requested_port} indisponible sur {host}: {exc.output}"
+        ) from exc
 
-    if available != requested_port:
-        info(
-            logger,
-            "[%s] port %s occupé, utilisation du port %s",
-            host,
-            requested_port,
-            available,
+    last_line = output.strip().splitlines()[-1] if output.strip() else ""
+    if last_line != str(requested_port):
+        raise RuntimeError(
+            f"Port {requested_port} indisponible sur {host}: {output!r}"
         )
 
-    return available
+    return requested_port
 
 
 def sync_self_signed_ca(
@@ -1624,7 +1549,13 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--dgx-base", default=DEFAULT_DGX_BASE)
     parser.add_argument("--repo-url", default=DEFAULT_REPO_URL)
     parser.add_argument("--repo-name", default=DEFAULT_REPO_NAME)
-    parser.add_argument("--server-port", type=int, default=DEFAULT_SERVER_PORT)
+    parser.add_argument(
+        "--server-port",
+        type=int,
+        default=DEFAULT_SERVER_PORT,
+        choices=[DEFAULT_SERVER_PORT],
+        help="Port orchestrateur (8443 uniquement)",
+    )
     parser.add_argument("--log-file", default="")
     parser.add_argument("--self-signed", action="store_true", help="Génère des certificats auto-signés et les synchronise")
     return parser.parse_args()
