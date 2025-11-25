@@ -5,6 +5,8 @@ set -e
 SUPERLINK_ADDRESS="${SERVER_ADDRESS:-127.0.0.1:8080}"
 
 TLS_FLAGS=""
+USE_TLS=${USE_TLS:-true}
+
 if [[ "${USE_TLS,,}" == "true" ]]; then
     # Flower 1.23 SuperNode utilise --root-certificates pour valider le serveur
     if [[ -f "$CA_CERT_PATH" ]]; then
@@ -17,8 +19,8 @@ if [[ "${USE_TLS,,}" == "true" ]]; then
         exit 1
     fi
 else
-    echo "[client] TLS désactivé (--insecure)."
-    TLS_FLAGS="--insecure"
+    echo "[client] ERREUR: le mode --insecure est interdit. Activez USE_TLS et fournissez la CA."
+    exit 1
 fi
 
 echo "[client] Démarrage du SuperNode vers $SUPERLINK_ADDRESS..."
