@@ -33,12 +33,12 @@ SUPERLINK_PID=$!
 # Attendre que le SuperLink soit prêt (simple sleep pour ce script, ou check netcat)
 sleep 5
 
-# 2. Démarrer le ServerApp (Logique FedAvg) qui se connecte au SuperLink localement
+# 2. Démarrer le ServerApp (Logique FedAvg) qui se connecte au SuperLink localement.
+#    La connexion AppIo est interne (loopback), Flower 1.23 n'accepte pas de paramètres TLS ici.
 echo "[orchestrator] Démarrage du ServerApp..."
 flower-superexec \
     --plugin-type serverapp \
-    --appio-api-address "127.0.0.1:${FLOWER_SERVERAPP_PORT:-9091}" \
-    $TLS_FLAGS &
+    --appio-api-address "127.0.0.1:${FLOWER_SERVERAPP_PORT:-9091}" &
 
 # Attendre les processus
 wait $SUPERLINK_PID
