@@ -4,13 +4,18 @@ set -e
 USE_TLS=${USE_TLS:-false}
 
 # Configuration TLS pour le SuperLink (Fleet API = lien vers les clients)
+#
+# Remarque importante : flower-superexec (ServerApp) ne supporte pas TLS à la
+# date actuelle. Le SuperLink sert à la fois la Fleet API (clients) ET le
+# ServerAppIo, donc activer TLS côté SuperLink obligerait aussi le ServerApp à
+# parler TLS… ce qu'il ne sait pas faire. Pour éviter les erreurs de handshake
+# observées précédemment, on force donc SuperLink à rester en clair tant que
+# superexec n'offre pas la prise en charge TLS.
 TLS_FLAGS="--insecure"
 if [[ "${USE_TLS,,}" == "true" ]]; then
     if [[ -f "$CA_CERT_PATH" && -f "$SERVER_CERT_PATH" && -f "$SERVER_KEY_PATH" ]]; then
-        echo "[orchestrator] TLS activé pour le SuperLink (CA: $CA_CERT_PATH)."
-        TLS_FLAGS="--ssl-ca-certfile $CA_CERT_PATH --ssl-certfile $SERVER_CERT_PATH --ssl-keyfile $SERVER_KEY_PATH"
-        echo "[orchestrator] AVERTISSEMENT: flower-superexec ne supporte pas TLS, bascule en mode --insecure."
-        echo "               Les certificats fournis ne seront pas utilisés pour la boucle locale ServerAppIo."
+        echo "[orchestrator] TLS demandé, mais flower-superexec ne supporte pas TLS sur la liaison ServerAppIo."
+        echo "[orchestrator] SuperLink démarrera donc en clair (--insecure) pour rester compatible."
     else
         echo "[orchestrator] TLS demandé mais certificats introuvables, fallback en --insecure."
     fi
