@@ -53,7 +53,15 @@ def use_tls() -> bool:
     return os.getenv("USE_TLS", "true").lower() in {"1", "true", "yes"}
 
 
-def build_superlink_cmd(server_host: str, fleet_port: str, serverapp_port: str) -> List[str]:
+def tls_supported_by_serverapp() -> bool:
+    """Indique si ``flwr-serverapp`` gère le TLS (non supporté en 1.23)."""
+
+    return False
+
+
+def build_superlink_cmd(
+    server_host: str, fleet_port: str, serverapp_port: str, enable_tls: bool
+) -> List[str]:
     """Construit la commande ``flower-superlink`` avec ou sans certificats."""
 
     ca_path = os.getenv("CA_CERT_PATH")
@@ -68,7 +76,7 @@ def build_superlink_cmd(server_host: str, fleet_port: str, serverapp_port: str) 
         f"{server_host}:{serverapp_port}",
     ]
 
-    if use_tls() and cert_path and key_path:
+    if enable_tls and cert_path and key_path:
         cmd.extend(["--ssl-certfile", cert_path, "--ssl-keyfile", key_path])
         if ca_path:
             cmd.extend(["--ssl-ca-certfile", ca_path])
@@ -78,21 +86,21 @@ def build_superlink_cmd(server_host: str, fleet_port: str, serverapp_port: str) 
     return cmd
 
 
-def build_serverapp_cmd(serverapp_port: str) -> List[str]:
-    """Construit la commande ``flower-server-app`` qui se connecte au SuperLink."""
+def build_serverapp_cmd(serverapp_port: str, enable_tls: bool) -> List[str]:
+    """Construit la commande ``flwr-serverapp`` qui se connecte au SuperLink."""
 
-    ca_path = os.getenv("CA_CERT_PATH")
-
-    # ``flower-server-app`` est installé comme script console avec Flower 1.23,
-    # mais dans certains environnements le binaire peut ne pas être exposé dans
-    # le PATH (ou être renommé). On détecte sa présence et on bascule
-    # automatiquement vers ``python -m flwr.serverapp`` si nécessaire.
-    executable = shutil.which("flower-server-app")
+    # Depuis Flower 1.23 le binaire s'appelle ``flwr-serverapp`` (sans tirets),
+    # mais certains environnements historiques peuvent encore fournir
+    # ``flower-server-app``. On supporte les deux noms, avec priorité au binaire
+    # officiel.
+    executable = shutil.which("flwr-serverapp") or shutil.which("flower-server-app")
     if executable:
         cmd: List[str] = [executable]
     else:
-        print("[orchestrator] 'flower-server-app' introuvable, utilisation du module Python")
-        cmd = ["python", "-m", "flwr.serverapp"]
+        print(
+            "[orchestrator] 'flwr-serverapp' introuvable, utilisation du binaire ``flwr``"
+        )
+        cmd = ["flwr", "serverapp"]
 
     cmd.extend(
         [
@@ -103,9 +111,9 @@ def build_serverapp_cmd(serverapp_port: str) -> List[str]:
         ]
     )
 
-    if use_tls() and ca_path:
-        cmd.extend(["--root-certificates", ca_path])
-    elif not use_tls():
+    # ``flwr-serverapp`` ne gère pas encore TLS: on force donc le mode
+    # --insecure même si des certificats sont fournis.
+    if not enable_tls:
         cmd.append("--insecure")
 
     return cmd
@@ -130,8 +138,18 @@ def main() -> None:
     fleet_port = os.getenv("FLOWER_SERVER_PORT", "8080")
     serverapp_port = os.getenv("FLOWER_SERVERAPP_PORT", "9091")
 
-    superlink_cmd = build_superlink_cmd(server_host, fleet_port, serverapp_port)
-    serverapp_cmd = build_serverapp_cmd(serverapp_port)
+    tls_requested = use_tls()
+    if tls_requested and not tls_supported_by_serverapp():
+        print(
+            "[orchestrator] TLS demandé mais non supporté par `flwr-serverapp` (Flower 1.23)."
+            " Bascule en mode --insecure pour SuperLink et ServerApp."
+        )
+        tls_requested = False
+
+    superlink_cmd = build_superlink_cmd(
+        server_host, fleet_port, serverapp_port, enable_tls=tls_requested
+    )
+    serverapp_cmd = build_serverapp_cmd(serverapp_port, enable_tls=tls_requested)
 
     superlink_proc = run_process(superlink_cmd)
 
