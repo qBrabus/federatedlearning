@@ -35,7 +35,6 @@ sleep 5
 echo "[orchestrator] Démarrage du ServerApp..."
 flwr-serverapp \
     --serverappio-api-address "127.0.0.1:${FLOWER_SERVERAPP_PORT:-9091}" \
-    --app app.server:app \
     --insecure &
 
 # Attendre les processus

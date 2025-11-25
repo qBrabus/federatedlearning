@@ -26,5 +26,4 @@ echo "[client] Démarrage du SuperNode vers $SUPERLINK_ADDRESS..."
 # Le supernode se connecte au SuperLink et exécute la ClientApp
 flower-supernode \
     --superlink "$SUPERLINK_ADDRESS" \
-    --app app.client:app \
     $TLS_FLAGS
