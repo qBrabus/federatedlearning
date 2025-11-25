@@ -1,22 +1,21 @@
 #!/bin/bash
 set -e
 
-USE_TLS=${USE_TLS:-true}
+USE_TLS=${USE_TLS:-false}
 
 # Configuration TLS pour le SuperLink (Fleet API = lien vers les clients)
 TLS_FLAGS=""
 if [[ "${USE_TLS,,}" == "true" ]]; then
-    if [[ -f "$CA_CERT_PATH" && -f "$SERVER_CERT_PATH" && -f "$SERVER_KEY_PATH" ]]; then
-        echo "[orchestrator] TLS activé avec certificats."
-        TLS_FLAGS="--ssl-ca-certfile $CA_CERT_PATH --ssl-certfile $SERVER_CERT_PATH --ssl-keyfile $SERVER_KEY_PATH"
-    else
-        echo "[orchestrator] ERREUR: Fichiers certificats manquants pour TLS."
-        exit 1
-    fi
+    echo "[orchestrator] AVERTISSEMENT: flower-superexec ne supporte pas TLS, bascule en mode --insecure."
+    echo "               Les certificats fournis ne seront pas utilisés."
 else
-    echo "[orchestrator] ERREUR: le mode --insecure est interdit. Activez USE_TLS et fournissez des certificats."
-    exit 1
+    echo "[orchestrator] TLS désactivé (connexion interne ServerAppIo en clair)."
 fi
+
+echo "[orchestrator] La liaison loopback SuperLink ↔ ServerAppIo reste en clair (TLS non supporté côté superexec)."
+
+# flower-superexec impose actuellement --insecure (TLS non supporté)
+SUPEREXEC_FLAGS="--insecure"
 
 # 1. Démarrer le SuperLink (Routeur) en arrière-plan
 # Il écoute sur 0.0.0.0:8080 pour les clients (Fleet) et 9091 pour le ServerApp (ServerAppIo).
@@ -38,7 +37,8 @@ sleep 5
 echo "[orchestrator] Démarrage du ServerApp..."
 flower-superexec \
     --plugin-type serverapp \
-    --appio-api-address "127.0.0.1:${FLOWER_SERVERAPP_PORT:-9091}" &
+    --appio-api-address "127.0.0.1:${FLOWER_SERVERAPP_PORT:-9091}" \
+    $SUPEREXEC_FLAGS &
 
 # Attendre les processus
 wait $SUPERLINK_PID
