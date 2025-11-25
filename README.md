@@ -26,8 +26,8 @@ Ce dépôt fournit une démonstration complète d'apprentissage fédéré avec *
 
 ## Architecture applicative (sans API dépréciée)
 
-- **Orchestrateur** : `orchestrator/run.sh` démarre un **SuperLink** (port Fleet API par défaut `8080`, Exec API `9091`) puis le **ServerApp** défini dans `orchestrator/app/server.py` qui se connecte localement en gRPC au SuperLink. La stratégie `FedAvg` impose `min_fit_clients=min_available_clients=min_evaluate_clients=1` et le nombre de rounds peut être piloté via `run_config["num-server-rounds"]`. TLS est activé si les chemins `CA_CERT_PATH`/`SERVER_CERT_PATH`/`SERVER_KEY_PATH` existent ; sinon `--insecure` est utilisé.【F:orchestrator/run.sh†L1-L46】【F:orchestrator/app/server.py†L1-L23】
-- **Client DGX** : `client/run.sh` invoque `flower-supernode` vers le SuperLink (adresse `SERVER_ADDRESS`, ex. `10.200.241.101:8443`). Le **ClientApp** construit dans `client/app/client.py` expose un `NumPyClient` PyTorch minimal (MLP 28x28, données synthétiques) avec hyperparamètres issus de l'environnement (`N_LOCAL_EPOCHS`, `BATCH_SIZE`, `LEARNING_RATE`). TLS utilise `--root-certificates` si `USE_TLS=true` et `CA_CERT_PATH` est présent, sinon le mode `--insecure` est sélectionné.【F:client/run.sh†L1-L30】【F:client/app/client.py†L1-L81】
+- **Orchestrateur** : `orchestrator/run.sh` démarre un **SuperLink** (port Fleet API par défaut `8080`, Exec API `9091`) puis le **ServerApp** défini dans `orchestrator/app/server.py` via `flower-superexec` (API moderne recommandée). La stratégie `FedAvg` impose `min_fit_clients=min_available_clients=min_evaluate_clients=1` et le nombre de rounds peut être piloté via `run_config["num-server-rounds"]`. Le TLS/mTLS est **obligatoire** : le script refuse désormais le mode `--insecure` et exige `CA_CERT_PATH`/`SERVER_CERT_PATH`/`SERVER_KEY_PATH`.【F:orchestrator/run.sh†L1-L48】【F:orchestrator/app/server.py†L1-L23】
+- **Client DGX** : `client/run.sh` invoque `flower-supernode` vers le SuperLink (adresse `SERVER_ADDRESS`, ex. `10.200.241.101:8443`). Le **ClientApp** construit dans `client/app/client.py` expose un `NumPyClient` PyTorch minimal (MLP 28x28, données synthétiques) avec hyperparamètres issus de l'environnement (`N_LOCAL_EPOCHS`, `BATCH_SIZE`, `LEARNING_RATE`). Le mode `--insecure` est interdit ; TLS est imposé via `--root-certificates` avec la CA fournie (`USE_TLS=true` par défaut).【F:client/run.sh†L1-L31】【F:client/app/client.py†L1-L81】
 
 Cette approche élimine les avertissements `start_server()/start_client()` dépréciés et améliore la robustesse réseau (retries intégrés côté SuperNode).
 
@@ -156,7 +156,7 @@ cd /raid/workspace/qladane/federated/federatedlearning && SERVER_ADDRESS=10.200.
 ## Conseils TLS/mTLS
 
 - Ajoutez l'adresse ou le FQDN du hub dans `CERT_SERVER_SAN` avant de générer les certificats pour éviter les erreurs de nom d'hôte (ex. `CERT_SERVER_SAN="DNS:proxy.local,IP:10.200.241.101"`).【F:run_docker_FL.sh†L140-L180】
-- Pour activer mTLS, fournissez également `CLIENT_CERT_PATH` et `CLIENT_KEY_PATH` côté client ; le SuperNode vérifiera la CA serveur via `--root-certificates` et pourra être étendu avec les options `--auth-*` si nécessaire.【F:client/run.sh†L1-L30】
+- Pour activer mTLS, fournissez également `CLIENT_CERT_PATH` et `CLIENT_KEY_PATH` côté client ; le SuperNode vérifiera la CA serveur via `--root-certificates` et pourra être étendu avec les options `--auth-*` si nécessaire. Le mode `--insecure` n'est plus supporté par les scripts de lancement.【F:client/run.sh†L1-L31】
 - En environnement de test, l'option `--self-signed` s'occupe de générer et monter les certificats côté orchestrateur et client.
 
 ## Licence

@@ -1,6 +1,8 @@
 #!/bin/bash
 set -e
 
+USE_TLS=${USE_TLS:-true}
+
 # Configuration TLS pour le SuperLink (Fleet API = lien vers les clients)
 TLS_FLAGS=""
 if [[ "${USE_TLS,,}" == "true" ]]; then
@@ -12,8 +14,8 @@ if [[ "${USE_TLS,,}" == "true" ]]; then
         exit 1
     fi
 else
-    echo "[orchestrator] TLS désactivé (--insecure)."
-    TLS_FLAGS="--insecure"
+    echo "[orchestrator] ERREUR: le mode --insecure est interdit. Activez USE_TLS et fournissez des certificats."
+    exit 1
 fi
 
 # 1. Démarrer le SuperLink (Routeur) en arrière-plan
@@ -33,9 +35,10 @@ sleep 5
 
 # 2. Démarrer le ServerApp (Logique FedAvg) qui se connecte au SuperLink localement
 echo "[orchestrator] Démarrage du ServerApp..."
-flwr-serverapp \
+flower-superexec \
+    --plugin-type serverapp \
     --serverappio-api-address "127.0.0.1:${FLOWER_SERVERAPP_PORT:-9091}" \
-    --insecure &
+    $TLS_FLAGS &
 
 # Attendre les processus
 wait $SUPERLINK_PID
