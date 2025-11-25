@@ -37,7 +37,7 @@ sleep 5
 echo "[orchestrator] Démarrage du ServerApp..."
 flower-superexec \
     --plugin-type serverapp \
-    --serverappio-api-address "127.0.0.1:${FLOWER_SERVERAPP_PORT:-9091}" \
+    --appio-api-address "127.0.0.1:${FLOWER_SERVERAPP_PORT:-9091}" \
     $TLS_FLAGS &
 
 # Attendre les processus
