@@ -121,8 +121,8 @@ case "$COMPONENT" in
       fi
 
       CERT_SERVER_SAN="$SERVER_SAN" "$CERT_SCRIPT" --orch-dir "$(pwd)/certs/orchestrator" --client-dir "$CERTS_DIR"
-      # Force l'utilisation de TLS lorsque des certificats auto-signés sont générés
-      export USE_TLS=true
+      # TLS côté SuperLink reste désactivé (flower-superexec ne supporte pas encore TLS)
+      export USE_TLS=false
     fi
 
     if [[ ! -f "$CLIENT_ENV_FILE" && -f "${CLIENT_ENV_FILE}.example" ]]; then

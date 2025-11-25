@@ -26,8 +26,8 @@ Ce dépôt fournit une démonstration complète d'apprentissage fédéré avec *
 
 ## Architecture applicative (sans API dépréciée)
 
-- **Orchestrateur** : `orchestrator/run.sh` démarre un **SuperLink** (port Fleet API par défaut `8080`, Exec API `9091`) puis le **ServerApp** défini dans `orchestrator/app/server.py` via `flower-superexec` (API moderne recommandée). La stratégie `FedAvg` impose `min_fit_clients=min_available_clients=min_evaluate_clients=1` et le nombre de rounds peut être piloté via `run_config["num-server-rounds"]`. Le TLS/mTLS est **obligatoire** côté SuperLink (certificats exigés, aucun mode `--insecure`), tandis que la connexion `flower-superexec` reste interne (loopback) sans paramètres TLS additionnels.【F:orchestrator/run.sh†L1-L48】【F:orchestrator/app/server.py†L1-L23】
-- **Client DGX** : `client/run.sh` invoque `flower-supernode` vers le SuperLink (adresse `SERVER_ADDRESS`, ex. `10.200.241.101:8443`). Le **ClientApp** construit dans `client/app/client.py` expose un `NumPyClient` PyTorch minimal (MLP 28x28, données synthétiques) avec hyperparamètres issus de l'environnement (`N_LOCAL_EPOCHS`, `BATCH_SIZE`, `LEARNING_RATE`). Le mode `--insecure` est interdit ; TLS est imposé via `--root-certificates` avec la CA fournie (`USE_TLS=true` par défaut).【F:client/run.sh†L1-L31】【F:client/app/client.py†L1-L81】
+- **Orchestrateur** : `orchestrator/run.sh` démarre un **SuperLink** (port Fleet API par défaut `8080`, Exec API `9091`) puis le **ServerApp** défini dans `orchestrator/app/server.py` via `flower-superexec` (API moderne recommandée). La stratégie `FedAvg` impose `min_fit_clients=min_available_clients=min_evaluate_clients=1` et le nombre de rounds peut être piloté via `run_config["num-server-rounds"]`. **Important :** Flower 1.23 ne supporte pas encore TLS côté `flower-superexec`; le script active donc systématiquement `--insecure` et ignore les certificats éventuellement fournis. La communication **loopback** interne entre SuperLink et ServerAppIo reste donc en clair, même lorsque TLS est activé pour les clients.【F:orchestrator/run.sh†L1-L48】【F:orchestrator/app/server.py†L1-L23】
+- **Client DGX** : `client/run.sh` invoque `flower-supernode` vers le SuperLink (adresse `SERVER_ADDRESS`, ex. `10.200.241.101:8443`). Le **ClientApp** construit dans `client/app/client.py` expose un `NumPyClient` PyTorch minimal (MLP 28x28, données synthétiques) avec hyperparamètres issus de l'environnement (`N_LOCAL_EPOCHS`, `BATCH_SIZE`, `LEARNING_RATE`). Par défaut le client utilise `--insecure` (TLS désactivé) pour rester compatible avec le SuperLink en clair ; vous pouvez réactiver TLS en fournissant une CA et en positionnant `USE_TLS=true`.【F:client/run.sh†L1-L34】【F:client/app/client.py†L1-L81】
 
 Cette approche élimine les avertissements `start_server()/start_client()` dépréciés et améliore la robustesse réseau (retries intégrés côté SuperNode).
 
@@ -74,12 +74,12 @@ Les certificats sont posés en lecture seule (chmod 644) et copiés dans chaque 
 
 1. **Orchestrateur** (SuperLink sur 8080 → port hôte via `HOST_PORT_OVERRIDE`, Exec API 9091) :
    ```bash
-   HOST_PORT_OVERRIDE=8443 ./run_docker_FL.sh orchestrator --self-signed --detach
+   HOST_PORT_OVERRIDE=8443 USE_TLS=false ./run_docker_FL.sh orchestrator --detach
    ```
 
-2. **Client DGX** (se connecte au port SuperLink exposé sur le proxy, TLS activé si `--self-signed`) :
+2. **Client DGX** (se connecte au port SuperLink exposé sur le proxy, en clair par défaut) :
    ```bash
-   SERVER_ADDRESS=10.200.241.101:8443 USE_TLS=true ./run_docker_FL.sh client --self-signed --detach
+   SERVER_ADDRESS=10.200.241.101:8443 USE_TLS=false ./run_docker_FL.sh client --detach
    ```
 
 Chaque lancement crée les répertoires `certs/` (si `--self-signed`) et `data/` côté client, monte les certificats, applique les variables d'environnement et démarre les conteneurs `fl-orchestrator` et `fl-client-dgx`. L'option `--detach` garde les conteneurs actifs après le script ; définissez `KEEP_CONTAINER_LOGS=true` pour conserver les conteneurs une fois arrêtés.【F:run_docker_FL.sh†L1-L112】【F:run_docker_FL.sh†L113-L201】
@@ -103,7 +103,7 @@ Chaque lancement crée les répertoires `certs/` (si `--self-signed`) et `data/`
 - `CA_CERT_PATH`, `CLIENT_CERT_PATH`, `CLIENT_KEY_PATH`
 - `DATA_DIR` (montage des données locales si nécessaire)
 
-Si un fichier `.env` est absent, le script `run_docker_FL.sh` tente de basculer vers le `.env.example` correspondant. L'option `--self-signed` force `USE_TLS=true` côté client et ajoute le SAN adéquat pour l'adresse du serveur.【F:run_docker_FL.sh†L35-L112】【F:run_docker_FL.sh†L140-L188】
+Si un fichier `.env` est absent, le script `run_docker_FL.sh` tente de basculer vers le `.env.example` correspondant. L'option `--self-signed` génère toujours des certificats mais n'active plus TLS automatiquement (Flower 1.23 impose `--insecure` côté orchestrateur).【F:run_docker_FL.sh†L35-L112】【F:run_docker_FL.sh†L140-L188】
 
 ## Automatisation multi-hôtes (Windows ou Linux)
 
@@ -111,7 +111,7 @@ Le script `scripts/deploy_windows_e2e.py` orchestre l'ensemble depuis une machin
 
 1. Vérifie ou installe **Docker** et **Git** sur chaque hôte cible (via `curl https://get.docker.com | sh` si nécessaire).【F:scripts/deploy_windows_e2e.py†L6-L56】
 2. Clone ou met à jour ce dépôt sur les hôtes (chemins par défaut `~/federated` pour l'orchestrateur, `/raid/workspace/qladane/federated` pour le DGX).【F:scripts/deploy_windows_e2e.py†L20-L33】
-3. Prépare les `.env` à partir des exemples, applique une configuration minimale de test (1 client suffisant, port SuperLink configurable, TLS/mTLS activé). Le port demandé (par défaut 8443) est imposé ; si le port est occupé côté proxy ou filtré depuis le DGX, le script échoue pour garantir la cohérence de la topologie.【F:scripts/deploy_windows_e2e.py†L731-L786】【F:scripts/deploy_windows_e2e.py†L1451-L1494】
+3. Prépare les `.env` à partir des exemples, applique une configuration minimale de test (1 client suffisant, port SuperLink configurable, TLS/mTLS optionnel mais désactivé par défaut tant que `flower-superexec` reste sans support TLS). Le port demandé (par défaut 8443) est imposé ; si le port est occupé côté proxy ou filtré depuis le DGX, le script échoue pour garantir la cohérence de la topologie.【F:scripts/deploy_windows_e2e.py†L731-L786】【F:scripts/deploy_windows_e2e.py†L1451-L1494】
 4. Construit et lance les conteneurs via `build_docker_FL.sh` et `run_docker_FL.sh`, avec certificats auto-signés optionnels.
 5. Exécute des tests : connectivité SSH, disponibilité Docker, état des conteneurs, handshake gRPC/mTLS depuis le conteneur client, extraction rapide des logs Flower.
 6. Arrête proprement les conteneurs et rappelle les commandes pour relancer manuellement.
@@ -156,7 +156,7 @@ cd /raid/workspace/qladane/federated/federatedlearning && SERVER_ADDRESS=10.200.
 ## Conseils TLS/mTLS
 
 - Ajoutez l'adresse ou le FQDN du hub dans `CERT_SERVER_SAN` avant de générer les certificats pour éviter les erreurs de nom d'hôte (ex. `CERT_SERVER_SAN="DNS:proxy.local,IP:10.200.241.101"`).【F:run_docker_FL.sh†L140-L180】
-- Pour activer mTLS, fournissez également `CLIENT_CERT_PATH` et `CLIENT_KEY_PATH` côté client ; le SuperNode vérifiera la CA serveur via `--root-certificates` et pourra être étendu avec les options `--auth-*` si nécessaire. Le mode `--insecure` n'est plus supporté par les scripts de lancement.【F:client/run.sh†L1-L31】
+- Pour activer TLS ou mTLS, fournissez `USE_TLS=true` ainsi que `CA_CERT_PATH` (et éventuellement `CLIENT_CERT_PATH`/`CLIENT_KEY_PATH`). En l'absence de CA, les scripts basculent automatiquement sur `--insecure` côté SuperNode pour rester compatibles avec le SuperLink non chiffré.【F:client/run.sh†L1-L34】【F:orchestrator/run.sh†L1-L33】
 - En environnement de test, l'option `--self-signed` s'occupe de générer et monter les certificats côté orchestrateur et client.
 
 ## Licence
