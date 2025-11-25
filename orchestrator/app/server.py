@@ -14,6 +14,7 @@ utilisées par ``run_docker_FL.sh``.
 """
 
 import os
+import shutil
 import subprocess
 import time
 from typing import List, Sequence
@@ -81,13 +82,26 @@ def build_serverapp_cmd(serverapp_port: str) -> List[str]:
     """Construit la commande ``flower-server-app`` qui se connecte au SuperLink."""
 
     ca_path = os.getenv("CA_CERT_PATH")
-    cmd: List[str] = [
-        "flower-server-app",
-        "--serverappio-api-address",
-        f"127.0.0.1:{serverapp_port}",
-        "--app",
-        "app.server:app",
-    ]
+
+    # ``flower-server-app`` est installé comme script console avec Flower 1.23,
+    # mais dans certains environnements le binaire peut ne pas être exposé dans
+    # le PATH (ou être renommé). On détecte sa présence et on bascule
+    # automatiquement vers ``python -m flwr.serverapp`` si nécessaire.
+    executable = shutil.which("flower-server-app")
+    if executable:
+        cmd: List[str] = [executable]
+    else:
+        print("[orchestrator] 'flower-server-app' introuvable, utilisation du module Python")
+        cmd = ["python", "-m", "flwr.serverapp"]
+
+    cmd.extend(
+        [
+            "--serverappio-api-address",
+            f"127.0.0.1:{serverapp_port}",
+            "--app",
+            "app.server:app",
+        ]
+    )
 
     if use_tls() and ca_path:
         cmd.extend(["--root-certificates", ca_path])
