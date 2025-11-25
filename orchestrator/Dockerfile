@@ -6,24 +6,25 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 
 WORKDIR ${APP_HOME}
 
-RUN apt-get update \ 
-    && apt-get install -y --no-install-recommends \ 
-        ca-certificates \ 
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        ca-certificates curl \
     && rm -rf /var/lib/apt/lists/*
 
 COPY requirements.txt requirements.txt
 RUN pip install --no-cache-dir -r requirements.txt
 
 COPY app/ app/
+COPY run.sh run.sh
+
+# Permissions pour le script
+RUN chmod +x run.sh
 
 RUN useradd -m flower && chown -R flower:flower ${APP_HOME}
 USER flower
 
-ENV GRPC_MAX_MESSAGE_LENGTH=536870912 \
-    FLOWER_SERVER_ADDRESS=0.0.0.0 \
-    FLOWER_SERVER_PORT=8080 \
+ENV FLOWER_SERVER_PORT=8080 \
     FLOWER_SERVERAPP_PORT=9091
 
 EXPOSE 8080 9091
 
-CMD ["python", "-m", "app.server"]
+CMD ["./run.sh"]
