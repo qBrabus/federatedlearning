@@ -1692,7 +1692,10 @@ def main() -> None:
         info(logger, "Tests terminés avec succès. Arrêt des conteneurs...")
     except Exception as exc:  # noqa: BLE001
         logger.error("Échec du déploiement/validation: %s", exc)
-        stop_containers([args.proxy_host, args.dgx_host], logger)
+        info(
+            logger,
+            "Les conteneurs restent en place pour conserver les logs. Pensez à les arrêter/nettoyer manuellement.",
+        )
         sys.exit(1)
 
     stop_containers([args.proxy_host, args.dgx_host], logger)
