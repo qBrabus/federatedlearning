@@ -17,11 +17,13 @@ else
 fi
 
 # 1. Démarrer le SuperLink (Routeur) en arrière-plan
-# Il écoute sur 0.0.0.0:8080 pour les clients (Fleet) et 9091 pour le ServerApp (Exec)
+# Il écoute sur 0.0.0.0:8080 pour les clients (Fleet) et 9091 pour le ServerApp (ServerAppIo).
+# Le Control API est exposé sur un port séparé pour éviter les conflits (ex-Exec API).
 echo "[orchestrator] Démarrage du SuperLink..."
 flower-superlink \
     --fleet-api-address "0.0.0.0:${FLOWER_SERVER_PORT:-8080}" \
-    --exec-api-address "0.0.0.0:${FLOWER_SERVERAPP_PORT:-9091}" \
+    --serverappio-api-address "0.0.0.0:${FLOWER_SERVERAPP_PORT:-9091}" \
+    --control-api-address "0.0.0.0:${FLOWER_CONTROL_API_PORT:-9093}" \
     $TLS_FLAGS &
 
 SUPERLINK_PID=$!
@@ -31,8 +33,8 @@ sleep 5
 
 # 2. Démarrer le ServerApp (Logique FedAvg) qui se connecte au SuperLink localement
 echo "[orchestrator] Démarrage du ServerApp..."
-flower-server-app \
-    --superlink "127.0.0.1:${FLOWER_SERVERAPP_PORT:-9091}" \
+flwr-serverapp \
+    --serverappio-api-address "127.0.0.1:${FLOWER_SERVERAPP_PORT:-9091}" \
     --app app.server:app \
     --insecure &
 
