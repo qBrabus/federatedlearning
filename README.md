@@ -6,10 +6,10 @@ Ce dépôt regroupe une démonstration complète d'apprentissage fédéré avec 
 
 ```
 ./
-├─ orchestrator/                 # Image Flower SuperLink (hub)
-│  ├─ Dockerfile                 # Python 3.11 slim, exécute flower-superlink
+├─ orchestrator/                 # Image Flower serveur gRPC
+│  ├─ Dockerfile                 # Python 3.11 slim, exécute un serveur Flower
 │  ├─ requirements.txt           # Dépendances (flwr)
-│  └─ app/server.py              # Construction dynamique des arguments TLS et ports
+│  └─ app/server.py              # Serveur FedAvg avec gestion TLS/mTLS
 ├─ client/                       # Image client DGX (GPU requis)
 │  ├─ Dockerfile                 # Basée sur pytorch/pytorch:2.4.1-cuda12.4-cudnn9-runtime
 │  ├─ requirements.txt           # flwr + torchmetrics
@@ -24,7 +24,7 @@ Ce dépôt regroupe une démonstration complète d'apprentissage fédéré avec 
 
 ## Architecture applicative
 
-- **Orchestrateur** (`orchestrator/app/server.py`) : construit l'appel `flower-superlink` en fonction des variables d'environnement (adresse d'écoute, port gRPC, port ServerApp optionnel). Si `USE_TLS` est vrai et que les fichiers de certificats sont fournis, il ajoute les options `--ssl-certfile`, `--ssl-keyfile` et `--ssl-ca-certfile`; sinon il passe en mode `--insecure`.【F:orchestrator/app/server.py†L13-L43】
+- **Orchestrateur** (`orchestrator/app/server.py`) : démarre directement un serveur Flower gRPC classique (FedAvg) sur l'adresse/port indiqués par l'environnement. Lorsque `USE_TLS` est activé et que `SERVER_CERT_PATH`/`SERVER_KEY_PATH` sont présents, il charge les certificats (optionnellement `CA_CERT_PATH`) et les transmet à `fl.server.start_server`, sinon le serveur écoute en clair.【F:orchestrator/app/server.py†L6-L74】
 - **Client DGX** (`client/app/client.py`) : implémentation `fl.client.NumPyClient` minimaliste avec un MLP sur données synthétiques. La configuration (adresse serveur, hyperparamètres, TLS/mTLS) est chargée depuis l'environnement ; le client détecte automatiquement CUDA, gère la compatibilité des signatures Flower pour les certificats (arguments `client_certificates` ou `certificate_chain`/`private_key`) et démarre via `fl.client.start_client`.【F:client/app/client.py†L16-L129】【F:client/app/client.py†L146-L213】
 
 ## Pré-requis
