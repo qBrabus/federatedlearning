@@ -4,6 +4,8 @@ set -euo pipefail
 ROOT_DIR=$(cd "$(dirname "$0")/.." && pwd)
 ENV_FILE="${ROOT_DIR}/.env"
 REMOTE_PATH=${REMOTE_PATH:-"~/federatedlearning"}
+# Utilisé pour les commandes docker compose locales (construction et résolution des chemins).
+PROJECT_DIR="$ROOT_DIR"
 
 if [[ ! -f "$ENV_FILE" ]]; then
   echo "[deploy] Fichier .env introuvable. Copiez .env.example puis personnalisez-le." >&2
@@ -82,10 +84,10 @@ sync_repo proxy-data
 sync_repo dgx
 
 echo "[deploy] Démarrage du hub sur le proxy (${PROXY_IP})"
-docker --context proxy-node compose --profile hub --project-directory "$REMOTE_PATH" up -d --build
+docker --context proxy-node compose --profile hub --project-directory "$PROJECT_DIR" up -d --build
 
 echo "[deploy] Démarrage du client + monitoring sur le DGX (${DGX_IP})"
-docker --context dgx-node compose --profile client --profile monitor --project-directory "$REMOTE_PATH" up -d --build
+docker --context dgx-node compose --profile client --profile monitor --project-directory "$PROJECT_DIR" up -d --build
 
 echo "✅ Déploiement terminé"
 echo "🔗 Hub Fleet API: http://${PROXY_IP}:${HUB_PORT}"
