@@ -24,19 +24,19 @@ PROMETHEUS_PORT=${PROMETHEUS_PORT:-9090}
 PROM_TEMPLATE="${ROOT_DIR}/monitoring/prometheus.tmpl.yml"
 PROM_RENDERED="${ROOT_DIR}/monitoring/prometheus.generated.yml"
 
-python - <<PY
+PROM_TEMPLATE="$PROM_TEMPLATE" PROM_RENDERED="$PROM_RENDERED" python - <<'PY'
 from pathlib import Path
 import os
 
-template = Path("$PROM_TEMPLATE").read_text()
+template = Path(os.environ["PROM_TEMPLATE"]).read_text()
 values = {
     "PROXY_IP": os.getenv("PROXY_IP", "127.0.0.1"),
 }
 rendered = template
 for key, val in values.items():
     rendered = rendered.replace(f"${{{key}}}", val)
-Path("$PROM_RENDERED").write_text(rendered)
-print(f"[deploy] Fichier Prometheus rendu vers $PROM_RENDERED")
+Path(os.environ["PROM_RENDERED"]).write_text(rendered)
+print(f"[deploy] Fichier Prometheus rendu vers {os.environ['PROM_RENDERED']}")
 PY
 
 create_context() {
