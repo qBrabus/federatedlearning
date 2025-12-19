@@ -62,8 +62,6 @@ services:
     profiles: [monitor]
     container_name: fl-cadvisor
     privileged: true
-    # On force cAdvisor à activer les métriques d'accélérateur (GPU)
-    command: ["--enable_metrics=cpu,memory,network,disk,accelerator"] 
     environment:
       - NVIDIA_VISIBLE_DEVICES=all
       - NVIDIA_DRIVER_CAPABILITIES=compute,utility
