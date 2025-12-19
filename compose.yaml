@@ -36,8 +36,9 @@ services:
     image: flwr/supernode:${FLWR_VERSION}
     profiles: [client]
     container_name: fl-supernode
+    # CORRECTION : Suppression du nom du binaire et correction du flag API
     command:
-      ["flower-supernode", "--superlink", "${PROXY_IP}:${HUB_PORT}", "--appio-api-address", "0.0.0.0:9094", "--insecure"]
+      ["--superlink", "${PROXY_IP}:${HUB_PORT}", "--clientappio-api-address", "0.0.0.0:9094", "--insecure"]
 
   clientapp:
     build: ./client
@@ -62,6 +63,7 @@ services:
     profiles: [monitor]
     container_name: fl-cadvisor
     privileged: true
+    # CORRECTION : On laisse les réglages par défaut pour éviter le crash
     environment:
       - NVIDIA_VISIBLE_DEVICES=all
       - NVIDIA_DRIVER_CAPABILITIES=compute,utility
@@ -79,12 +81,12 @@ services:
       - /var/run:/var/run:rw
       - /sys:/sys:ro
       - /var/lib/docker/:/var/lib/docker:ro
-      - /var/run/docker.sock:/var/run/docker.sock:ro # Socket ajouté ici aussi par sécurité
+      - /var/run/docker.sock:/var/run/docker.sock:ro
     ports:
       - "8080:8080"
 
   cadvisor-hub:
-    image: gcr.io/cadvisor/cadvisor:v0.47.0 # Version compatible vieux Docker
+    image: gcr.io/cadvisor/cadvisor:v0.47.0
     profiles: [hub]
     container_name: fl-cadvisor-hub
     privileged: true
@@ -95,7 +97,7 @@ services:
       - /var/run:/var/run:rw
       - /sys:/sys:ro
       - /var/lib/docker/:/var/lib/docker:ro
-      - /var/run/docker.sock:/var/run/docker.sock:ro # Indispensable pour voir fl-superlink
+      - /var/run/docker.sock:/var/run/docker.sock:ro
     ports:
       - "8081:8080"
 
