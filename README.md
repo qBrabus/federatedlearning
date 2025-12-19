@@ -47,7 +47,8 @@ Copiez `.env.example` en `.env` puis ajustez :
 ./scripts/deploy.sh
 ```
 Le script :
-- charge `.env` et rend `monitoring/prometheus/prometheus.yml` à partir du template avec l'IP du proxy ;
+- charge `.env` et rend `monitoring/prometheus/prometheus.yml` à partir du template avec l'IP du proxy (un fichier par défaut est
+  désormais versionné pour que le monitoring fonctionne aussi en exécution manuelle locale) ;
 - crée les contextes Docker `proxy-node` et `dgx-node` via SSH (`docker context create ... host=ssh://proxy-data` etc.) ;
 - synchronise le dépôt sur chaque hôte (rsync) ;
 - lance les profils Compose nécessaires : hub sur le proxy, client+monitoring sur le DGX.
