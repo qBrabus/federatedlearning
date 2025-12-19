@@ -2,11 +2,12 @@ global:
   scrape_interval: 5s
 
 scrape_configs:
+  # Monitoring des conteneurs sur le DGX (Local)
   - job_name: 'cadvisor-client'
     static_configs:
-      - targets: ['cadvisor:8080']
+      - targets: ['${DGX_IP}:8080']
 
+  # Monitoring des conteneurs sur le Proxy (Distant)
   - job_name: 'cadvisor-hub'
     static_configs:
       - targets: ['${PROXY_IP}:8081']
-
