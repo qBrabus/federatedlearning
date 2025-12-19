@@ -19,7 +19,8 @@ Ce dépôt fournit une pile d'apprentissage fédéré **Flower 1.25** prête pou
 │   ├── app/client.py              # NumPyClient avec hyperparamètres dynamiques
 │   └── run.sh                     # Lance flower-superexec vers le SuperNode
 └── monitoring/
-    ├── prometheus.tmpl.yml        # Modèle Prometheus (render vers prometheus.generated.yml)
+    ├── prometheus.tmpl.yml        # Modèle Prometheus (render vers prometheus/prometheus.yml)
+    ├── prometheus/                # Répertoire monté dans le conteneur Prometheus
     └── grafana-provisioning/      # Datasource + dashboard de base
 ```
 
@@ -46,7 +47,7 @@ Copiez `.env.example` en `.env` puis ajustez :
 ./scripts/deploy.sh
 ```
 Le script :
-- charge `.env` et rend `monitoring/prometheus.generated.yml` à partir du template avec l'IP du proxy ;
+- charge `.env` et rend `monitoring/prometheus/prometheus.yml` à partir du template avec l'IP du proxy ;
 - crée les contextes Docker `proxy-node` et `dgx-node` via SSH (`docker context create ... host=ssh://proxy-data` etc.) ;
 - synchronise le dépôt sur chaque hôte (rsync) ;
 - lance les profils Compose nécessaires : hub sur le proxy, client+monitoring sur le DGX.
@@ -65,7 +66,7 @@ Endpoints après déploiement :
   - `clientapp` (client) lance `flower-superexec` sur l'AppIo local, avec hyperparamètres `BATCH_SIZE`/`LEARNING_RATE` ou `run_config`.
 - **monitor** (DGX) :
   - `cadvisor` pour metrics conteneurs.
-  - `prometheus` avec configuration générée (`monitoring/prometheus.generated.yml`).
+  - `prometheus` avec configuration générée (`monitoring/prometheus/prometheus.yml`).
   - `grafana` pré-provisionné (datasource Prometheus + dashboard de base `Flower Federated Overview`).
 
 Lancez sélectivement un profil sur l'hôte courant (si vous ne passez pas par `deploy.sh`) :

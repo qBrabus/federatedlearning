@@ -26,11 +26,13 @@ DEPLOY_LOG_FOLLOW=${DEPLOY_LOG_FOLLOW:-false}
 DEPLOY_LOG_TIMEOUT=${DEPLOY_LOG_TIMEOUT:-60}
 
 PROM_TEMPLATE="${ROOT_DIR}/monitoring/prometheus.tmpl.yml"
-PROM_RENDERED="${ROOT_DIR}/monitoring/prometheus.generated.yml"
+PROM_RENDERED="${ROOT_DIR}/monitoring/prometheus/prometheus.yml"
 
 PROM_TEMPLATE="$PROM_TEMPLATE" PROM_RENDERED="$PROM_RENDERED" python - <<'PY'
 from pathlib import Path
 import os
+
+Path(os.environ["PROM_RENDERED"]).parent.mkdir(parents=True, exist_ok=True)
 
 template = Path(os.environ["PROM_TEMPLATE"]).read_text()
 values = {

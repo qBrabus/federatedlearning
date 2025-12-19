@@ -81,7 +81,7 @@ services:
     profiles: [monitor]
     container_name: fl-prometheus
     volumes:
-      - ./monitoring/prometheus.generated.yml:/etc/prometheus/prometheus.yml:ro
+      - ./monitoring/prometheus:/etc/prometheus:ro
     ports:
       - "${PROMETHEUS_PORT:-9090}:9090"
 
