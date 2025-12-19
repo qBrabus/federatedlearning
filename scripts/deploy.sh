@@ -22,6 +22,8 @@ set +a
 HUB_PORT=${HUB_PORT:-8443}
 GRAFANA_PORT=${GRAFANA_PORT:-3000}
 PROMETHEUS_PORT=${PROMETHEUS_PORT:-9090}
+DEPLOY_LOG_FOLLOW=${DEPLOY_LOG_FOLLOW:-false}
+DEPLOY_LOG_TIMEOUT=${DEPLOY_LOG_TIMEOUT:-60}
 
 PROM_TEMPLATE="${ROOT_DIR}/monitoring/prometheus.tmpl.yml"
 PROM_RENDERED="${ROOT_DIR}/monitoring/prometheus.generated.yml"
@@ -61,6 +63,45 @@ sync_repo() {
   rsync -avz --delete --exclude '.git/' --exclude 'certs/' --exclude 'data/' "${ROOT_DIR}/" "${target}:${REMOTE_PATH}/"
 }
 
+print_container_logs() {
+  local context=$1
+  shift
+  local services=("$@")
+
+  if [ ${#services[@]} -eq 0 ]; then
+    return
+  fi
+
+  echo "[deploy] Journaux des services en échec (${services[*]}) sur ${context}"
+  docker --context "$context" compose --project-directory "$PROJECT_DIR" logs --no-color --tail=200 "${services[@]}" || true
+
+  if [[ "$DEPLOY_LOG_FOLLOW" == "true" ]]; then
+    echo "[deploy] Suivi en temps réel (limité à ${DEPLOY_LOG_TIMEOUT}s) des services ${services[*]} sur ${context}"
+    if ! timeout "$DEPLOY_LOG_TIMEOUT" docker --context "$context" compose --project-directory "$PROJECT_DIR" logs --no-color -f "${services[@]}"; then
+      echo "[deploy] Suivi des logs interrompu (timeout ${DEPLOY_LOG_TIMEOUT}s)" >&2
+    fi
+  fi
+}
+
+check_services_health() {
+  local context=$1
+  local exited_services
+  local unhealthy_services
+
+  exited_services=$(docker --context "$context" compose --project-directory "$PROJECT_DIR" ps --services --filter "status=exited" --filter "status=dead") || true
+  unhealthy_services=$(docker --context "$context" compose --project-directory "$PROJECT_DIR" ps --services --filter "status=unhealthy") || true
+
+  if [[ -n "$exited_services" ]]; then
+    echo "[deploy] ⚠️ Services en échec détectés sur ${context}: ${exited_services//$'\n'/, }" >&2
+    print_container_logs "$context" $exited_services
+  fi
+
+  if [[ -n "$unhealthy_services" ]]; then
+    echo "[deploy] ⚠️ Services en état unhealthy détectés sur ${context}: ${unhealthy_services//$'\n'/, }" >&2
+    print_container_logs "$context" $unhealthy_services
+  fi
+}
+
 ensure_rsync() {
   local target=$1
 
@@ -85,9 +126,11 @@ sync_repo dgx
 
 echo "[deploy] Démarrage du hub sur le proxy (${PROXY_IP})"
 docker --context proxy-node compose --profile hub --project-directory "$PROJECT_DIR" up -d --build
+check_services_health proxy-node
 
 echo "[deploy] Démarrage du client + monitoring sur le DGX (${DGX_IP})"
 docker --context dgx-node compose --profile client --profile monitor --project-directory "$PROJECT_DIR" up -d --build
+check_services_health dgx-node
 
 echo "✅ Déploiement terminé"
 echo "🔗 Hub Fleet API: http://${PROXY_IP}:${HUB_PORT}"
