@@ -7,10 +7,6 @@ services:
       - "${HUB_PORT}:8080"
       - "9091:9091"
       - "9093:9093"
-    # The flwr/superlink image already sets the entrypoint to `flower-superlink`,
-    # so we only need to pass the arguments here. Including the binary name again
-    # makes Flower treat it as an unknown argument and the container exits with
-    # code 2.
     command:
       ["--fleet-api-address", "0.0.0.0:8080", "--serverappio-api-address", "0.0.0.0:9091", "--control-api-address", "0.0.0.0:9093", "--insecure"]
     healthcheck:
@@ -66,6 +62,8 @@ services:
     profiles: [monitor]
     container_name: fl-cadvisor
     privileged: true
+    # On force cAdvisor à activer les métriques d'accélérateur (GPU)
+    command: ["--enable_metrics=cpu,memory,network,disk,accelerator"] 
     environment:
       - NVIDIA_VISIBLE_DEVICES=all
       - NVIDIA_DRIVER_CAPABILITIES=compute,utility
@@ -83,11 +81,12 @@ services:
       - /var/run:/var/run:rw
       - /sys:/sys:ro
       - /var/lib/docker/:/var/lib/docker:ro
+      - /var/run/docker.sock:/var/run/docker.sock:ro # Socket ajouté ici aussi par sécurité
     ports:
       - "8080:8080"
 
   cadvisor-hub:
-    image: gcr.io/cadvisor/cadvisor:v0.47.0
+    image: gcr.io/cadvisor/cadvisor:v0.47.0 # Version compatible vieux Docker
     profiles: [hub]
     container_name: fl-cadvisor-hub
     privileged: true
@@ -98,7 +97,7 @@ services:
       - /var/run:/var/run:rw
       - /sys:/sys:ro
       - /var/lib/docker/:/var/lib/docker:ro
-      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - /var/run/docker.sock:/var/run/docker.sock:ro # Indispensable pour voir fl-superlink
     ports:
       - "8081:8080"
 
