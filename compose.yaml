@@ -1,0 +1,92 @@
+services:
+  superlink:
+    image: flwr/superlink:${FLWR_VERSION}
+    profiles: [hub]
+    container_name: fl-superlink
+    ports:
+      - "${HUB_PORT}:8080"
+      - "9091:9091"
+      - "9093:9093"
+    command:
+      ["flower-superlink", "--fleet-api-address", "0.0.0.0:8080", "--serverappio-api-address", "0.0.0.0:9091", "--control-api-address", "0.0.0.0:9093", "--insecure"]
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:9093/health')"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  serverapp:
+    build: ./orchestrator
+    profiles: [hub]
+    container_name: fl-serverapp
+    depends_on:
+      superlink:
+        condition: service_healthy
+    environment:
+      - APPIO_API_ADDRESS=superlink:9091
+      - NUM_ROUNDS=${NUM_ROUNDS}
+
+  supernode:
+    image: flwr/supernode:${FLWR_VERSION}
+    profiles: [client]
+    container_name: fl-supernode
+    command:
+      ["flower-supernode", "--superlink", "${PROXY_IP}:${HUB_PORT}", "--appio-api-address", "0.0.0.0:9094", "--insecure"]
+
+  clientapp:
+    build: ./client
+    profiles: [client]
+    container_name: fl-clientapp
+    depends_on:
+      - supernode
+    environment:
+      - APPIO_API_ADDRESS=supernode:9094
+      - BATCH_SIZE=${BATCH_SIZE}
+      - LEARNING_RATE=${LEARNING_RATE}
+    runtime: nvidia
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+
+  cadvisor:
+    image: gcr.io/cadvisor/cadvisor:v0.49.1
+    profiles: [monitor]
+    container_name: fl-cadvisor
+    privileged: true
+    devices:
+      - /dev/kmsg
+    volumes:
+      - /:/rootfs:ro
+      - /var/run:/var/run:rw
+      - /sys:/sys:ro
+      - /var/lib/docker/:/var/lib/docker:ro
+    ports:
+      - "8080:8080"
+
+  prometheus:
+    image: prom/prometheus:latest
+    profiles: [monitor]
+    container_name: fl-prometheus
+    volumes:
+      - ./monitoring/prometheus.generated.yml:/etc/prometheus/prometheus.yml:ro
+    ports:
+      - "${PROMETHEUS_PORT:-9090}:9090"
+
+  grafana:
+    image: grafana/grafana:latest
+    profiles: [monitor]
+    container_name: fl-grafana
+    ports:
+      - "${GRAFANA_PORT}:3000"
+    environment:
+      - GF_SECURITY_ADMIN_PASSWORD=admin
+    volumes:
+      - grafana-storage:/var/lib/grafana
+      - ./monitoring/grafana-provisioning/:/etc/grafana/provisioning/
+
+volumes:
+  grafana-storage:

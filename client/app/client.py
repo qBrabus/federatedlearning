@@ -86,11 +86,10 @@ class FlowerClient(NumPyClient):
 def client_fn(context: Context):
     """Fonction de construction du client."""
 
-    # Récupération de la configuration depuis les arguments run_config ou env
-    # Note: Avec ClientApp, on privilégie context, mais os.environ fonctionne encore
-    epochs = int(os.getenv("N_LOCAL_EPOCHS", "1"))
-    batch_size = int(os.getenv("BATCH_SIZE", "64"))
-    lr = float(os.getenv("LEARNING_RATE", "0.01"))
+    config = context.run_config
+    epochs = int(config.get("n-local-epochs", os.getenv("N_LOCAL_EPOCHS", "1")))
+    batch_size = int(config.get("batch-size", os.getenv("BATCH_SIZE", "64")))
+    lr = float(config.get("learning-rate", os.getenv("LEARNING_RATE", "0.01")))
 
     train_ds, val_ds = generate_synthetic_data()
     trainloader = DataLoader(train_ds, batch_size=batch_size, shuffle=True)
