@@ -10,6 +10,3 @@ scrape_configs:
     static_configs:
       - targets: ['${PROXY_IP}:8081']
 
-  - job_name: 'flower-hub'
-    static_configs:
-      - targets: ['${PROXY_IP}:9093']
