@@ -8,7 +8,7 @@
     ],
     "timezone": "browser",
     "schemaVersion": 38,
-    "version": 2,
+    "version": 3,
     "refresh": "10s",
     "panels": [
         {
@@ -42,11 +42,11 @@
             },
             "targets": [
                 {
-                    "expr": "sum(rate(container_cpu_usage_seconds_total{container=~\"/?fl-clientapp.*\"}[1m])) * 100",
+                    "expr": "sum(rate(container_cpu_usage_seconds_total{name=~\".*fl-clientapp.*\"}[1m])) * 100",
                     "legendFormat": "ClientApp CPU %"
                 },
                 {
-                    "expr": "sum(rate(container_cpu_usage_seconds_total{container=~\"/?fl-supernode.*\"}[1m])) * 100",
+                    "expr": "sum(rate(container_cpu_usage_seconds_total{name=~\".*fl-supernode.*\"}[1m])) * 100",
                     "legendFormat": "SuperNode CPU %"
                 }
             ]
@@ -82,11 +82,11 @@
             },
             "targets": [
                 {
-                    "expr": "sum(container_memory_usage_bytes{container=~\"/?fl-clientapp.*\"})",
+                    "expr": "sum(container_memory_usage_bytes{name=~\".*fl-clientapp.*\"})",
                     "legendFormat": "ClientApp"
                 },
                 {
-                    "expr": "sum(container_memory_usage_bytes{container=~\"/?fl-supernode.*\"})",
+                    "expr": "sum(container_memory_usage_bytes{name=~\".*fl-supernode.*\"})",
                     "legendFormat": "SuperNode"
                 }
             ]
@@ -122,11 +122,11 @@
             },
             "targets": [
                 {
-                    "expr": "sum(rate(container_cpu_usage_seconds_total{container=~\"/?fl-superlink.*\"}[1m])) * 100",
+                    "expr": "sum(rate(container_cpu_usage_seconds_total{name=~\".*fl-superlink.*\"}[1m])) * 100",
                     "legendFormat": "Superlink CPU %"
                 },
                 {
-                    "expr": "sum(rate(container_cpu_usage_seconds_total{container=~\"/?fl-serverapp.*\"}[1m])) * 100",
+                    "expr": "sum(rate(container_cpu_usage_seconds_total{name=~\".*fl-serverapp.*\"}[1m])) * 100",
                     "legendFormat": "ServerApp CPU %"
                 }
             ]
@@ -162,11 +162,11 @@
             },
             "targets": [
                 {
-                    "expr": "sum(container_memory_usage_bytes{container=~\"/?fl-superlink.*\"})",
+                    "expr": "sum(container_memory_usage_bytes{name=~\".*fl-superlink.*\"})",
                     "legendFormat": "Superlink"
                 },
                 {
-                    "expr": "sum(container_memory_usage_bytes{container=~\"/?fl-serverapp.*\"})",
+                    "expr": "sum(container_memory_usage_bytes{name=~\".*fl-serverapp.*\"})",
                     "legendFormat": "ServerApp"
                 }
             ]
@@ -202,12 +202,12 @@
             },
             "targets": [
                 {
-                    "expr": "sum by (container) (rate(container_network_receive_bytes_total{container=~\"/?fl-(clientapp|supernode|superlink|serverapp).*\"}[1m]))",
-                    "legendFormat": "{{container}} RX"
+                    "expr": "sum by (name) (rate(container_network_receive_bytes_total{name=~\".*fl-(clientapp|supernode|superlink|serverapp).*\"}[1m]))",
+                    "legendFormat": "{{name}} RX"
                 },
                 {
-                    "expr": "sum by (container) (rate(container_network_transmit_bytes_total{container=~\"/?fl-(clientapp|supernode|superlink|serverapp).*\"}[1m]))",
-                    "legendFormat": "{{container}} TX"
+                    "expr": "sum by (name) (rate(container_network_transmit_bytes_total{name=~\".*fl-(clientapp|supernode|superlink|serverapp).*\"}[1m]))",
+                    "legendFormat": "{{name}} TX"
                 }
             ]
         },
@@ -223,7 +223,7 @@
                 "h": 8,
                 "w": 24,
                 "x": 0,
-                "y": 16
+                "y": 24
             },
             "fieldConfig": {
                 "defaults": {
@@ -255,11 +255,11 @@
             },
             "targets": [
                 {
-                    "expr": "avg(rate(container_accelerator_duty_cycle{container=~\"/?fl-clientapp.*\"}[1m]))",
+                    "expr": "avg(rate(container_accelerator_duty_cycle{name=~\".*fl-clientapp.*\"}[1m]))",
                     "legendFormat": "GPU Utilization"
                 },
                 {
-                    "expr": "avg(container_accelerator_memory_used_bytes{container=~\"/?fl-clientapp.*\"})",
+                    "expr": "avg(container_accelerator_memory_used_bytes{name=~\".*fl-clientapp.*\"})",
                     "legendFormat": "Memory"
                 }
             ]
