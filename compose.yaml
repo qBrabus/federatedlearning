@@ -7,8 +7,12 @@ services:
       - "${HUB_PORT}:8080"
       - "9091:9091"
       - "9093:9093"
+    # The flwr/superlink image already sets the entrypoint to `flower-superlink`,
+    # so we only need to pass the arguments here. Including the binary name again
+    # makes Flower treat it as an unknown argument and the container exits with
+    # code 2.
     command:
-      ["flower-superlink", "--fleet-api-address", "0.0.0.0:8080", "--serverappio-api-address", "0.0.0.0:9091", "--control-api-address", "0.0.0.0:9093", "--insecure"]
+      ["--fleet-api-address", "0.0.0.0:8080", "--serverappio-api-address", "0.0.0.0:9091", "--control-api-address", "0.0.0.0:9093", "--insecure"]
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:9093/health')"]
       interval: 5s
