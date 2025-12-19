@@ -1,0 +1,63 @@
+{
+  "id": null,
+  "uid": "flower-overview",
+  "title": "Flower Federated Overview",
+  "tags": ["flower", "federated"],
+  "timezone": "browser",
+  "schemaVersion": 38,
+  "version": 1,
+  "refresh": "10s",
+  "panels": [
+    {
+      "type": "timeseries",
+      "title": "CPU (Client Stack)",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "Prometheus"
+      },
+      "targets": [
+        {
+          "expr": "sum(rate(container_cpu_usage_seconds_total{container=\"fl-clientapp\"}[1m])) * 100",
+          "legendFormat": "ClientApp CPU %"
+        },
+        {
+          "expr": "sum(rate(container_cpu_usage_seconds_total{container=\"fl-supernode\"}[1m])) * 100",
+          "legendFormat": "SuperNode CPU %"
+        }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Memory (Client Stack)",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "Prometheus"
+      },
+      "targets": [
+        {
+          "expr": "sum(container_memory_usage_bytes{container=\"fl-clientapp\"})",
+          "legendFormat": "ClientApp"
+        },
+        {
+          "expr": "sum(container_memory_usage_bytes{container=\"fl-supernode\"})",
+          "legendFormat": "SuperNode"
+        }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Hub Control Plane",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "Prometheus"
+      },
+      "targets": [
+        {
+          "expr": "up{job=\"flower-hub\"}",
+          "legendFormat": "SuperLink Control API"
+        }
+      ]
+    }
+  ],
+  "templating": {"list": []}
+}
