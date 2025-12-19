@@ -14,7 +14,13 @@ services:
     command:
       ["--fleet-api-address", "0.0.0.0:8080", "--serverappio-api-address", "0.0.0.0:9091", "--control-api-address", "0.0.0.0:9093", "--insecure"]
     healthcheck:
-      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:9093/health')"]
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import sys; import grpc; from grpc_health.v1 import health_pb2, health_pb2_grpc; channel = grpc.insecure_channel('localhost:9093'); stub = health_pb2_grpc.HealthStub(channel);\ntry:\n    resp = stub.Check(health_pb2.HealthCheckRequest());\n    sys.exit(0 if resp.status == health_pb2.HealthCheckResponse.SERVING else 1)\nexcept Exception:\n    sys.exit(1)",
+        ]
       interval: 5s
       timeout: 3s
       retries: 10
