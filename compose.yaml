@@ -77,7 +77,7 @@ services:
       - "8080:8080"
 
   cadvisor-hub:
-    image: gcr.io/cadvisor/cadvisor:latest
+    image: gcr.io/cadvisor/cadvisor:v0.47.0
     profiles: [hub]
     container_name: fl-cadvisor-hub
     privileged: true
