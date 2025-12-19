@@ -40,6 +40,7 @@ Path(os.environ["PROM_RENDERED"]).parent.mkdir(parents=True, exist_ok=True)
 template = Path(os.environ["PROM_TEMPLATE"]).read_text()
 values = {
     "PROXY_IP": os.getenv("PROXY_IP", "127.0.0.1"),
+    "DGX_IP": os.getenv("DGX_IP", "127.0.0.1"),
 }
 rendered = template
 for key, val in values.items():
