@@ -66,6 +66,16 @@ services:
     profiles: [monitor]
     container_name: fl-cadvisor
     privileged: true
+    environment:
+      - NVIDIA_VISIBLE_DEVICES=all
+      - NVIDIA_DRIVER_CAPABILITIES=compute,utility
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
     devices:
       - /dev/kmsg
     volumes:
@@ -88,6 +98,7 @@ services:
       - /var/run:/var/run:rw
       - /sys:/sys:ro
       - /var/lib/docker/:/var/lib/docker:ro
+      - /var/run/docker.sock:/var/run/docker.sock:ro
     ports:
       - "8081:8080"
 
