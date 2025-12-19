@@ -6,6 +6,9 @@ ENV_FILE="${ROOT_DIR}/.env"
 REMOTE_PATH=${REMOTE_PATH:-"~/federatedlearning"}
 # Utilisé pour les commandes docker compose locales (construction et résolution des chemins).
 PROJECT_DIR="$ROOT_DIR"
+# Utilisé pour les montages sur les hôtes distants (chemins doivent exister sur le nœud Docker).
+HOST_PROJECT_PATH=${HOST_PROJECT_PATH:-$REMOTE_PATH}
+export HOST_PROJECT_PATH
 
 if [[ ! -f "$ENV_FILE" ]]; then
   echo "[deploy] Fichier .env introuvable. Copiez .env.example puis personnalisez-le." >&2
@@ -125,6 +128,18 @@ ensure_rsync dgx
 
 sync_repo proxy-data
 sync_repo dgx
+
+resolve_remote_path() {
+  local target=$1
+  local path=$2
+
+  ssh -o BatchMode=yes "$target" "mkdir -p ${path} && cd ${path} && pwd"
+}
+
+# Les services monitorant les métriques tournent sur le DGX : on utilise son chemin absolu
+# pour monter les dossiers de configuration dans Prometheus/Grafana.
+HOST_PROJECT_PATH=$(resolve_remote_path dgx "$REMOTE_PATH")
+export HOST_PROJECT_PATH
 
 echo "[deploy] Démarrage du hub sur le proxy (${PROXY_IP})"
 docker --context proxy-node compose --profile hub --project-directory "$PROJECT_DIR" up -d --build
