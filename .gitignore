@@ -4,5 +4,4 @@ data/
 __pycache__/
 *.pyc
 monitoring/prometheus.generated.yml
-monitoring/prometheus/prometheus.yml
 .DS_Store
