@@ -80,9 +80,9 @@ docker compose --profile client --profile monitor up -d --build  # Sur le DGX
   - Hub : `docker --context proxy-node logs -f fl-serverapp`
   - Client : `docker --context dgx-node logs -f fl-clientapp`
 - Prometheus scrappe :
-  - cAdvisor (`localhost:8080`) pour CPU/Mem conteneurs DGX,
-  - SuperNode (`fl-supernode:9094`),
-  - SuperLink (`${PROXY_IP}:9093`) côté proxy.
+  - cAdvisor côté DGX (`cadvisor:8080`) pour CPU/Mem/GPU des conteneurs client/supernode,
+  - cAdvisor côté proxy (`${PROXY_IP}:8081`) pour CPU/Mem du hub (superlink + serverapp),
+  - SuperLink (`${PROXY_IP}:9093`) pour l'état du control plane.
 - Grafana : dashboard « Flower Federated Overview » affiche CPU/Mem des conteneurs clients et l'état du SuperLink.
 - Rapports Flower (traﬁc/rounds) depuis le proxy :
 ```bash
