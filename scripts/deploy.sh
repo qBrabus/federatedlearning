@@ -59,6 +59,25 @@ sync_repo() {
   rsync -avz --delete --exclude '.git/' --exclude 'certs/' --exclude 'data/' "${ROOT_DIR}/" "${target}:${REMOTE_PATH}/"
 }
 
+ensure_rsync() {
+  local target=$1
+
+  if ssh -o BatchMode=yes "$target" "command -v rsync >/dev/null 2>&1"; then
+    return
+  fi
+
+  echo "[deploy] rsync absent sur ${target}, tentative d'installation automatique (sudo requis)" >&2
+  if ssh -o BatchMode=yes "$target" "sudo apt-get update -y && sudo apt-get install -y rsync"; then
+    return
+  fi
+
+  echo "[deploy] Échec de l'installation de rsync sur ${target}. Installez-le manuellement puis relancez le déploiement." >&2
+  exit 1
+}
+
+ensure_rsync proxy-data
+ensure_rsync dgx
+
 sync_repo proxy-data
 sync_repo dgx
 
