@@ -1,4 +1,21 @@
 services:
+  dcgm-exporter:
+    image: nvcr.io/nvidia/k8s/dcgm-exporter:3.3.5-3.4.0-ubuntu22.04
+    profiles: [monitor]
+    container_name: fl-dcgm-exporter
+    restart: always
+    ports:
+      - "9400:9400"
+    cap_add:
+      - SYS_ADMIN
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+
   superlink:
     image: flwr/superlink:${FLWR_VERSION}
     profiles: [hub]
@@ -63,7 +80,8 @@ services:
     profiles: [monitor]
     container_name: fl-cadvisor
     privileged: true
-    # CORRECTION : On laisse les réglages par défaut pour éviter le crash
+    command:
+      - "--nldm_gpu_metrics"
     environment:
       - NVIDIA_VISIBLE_DEVICES=all
       - NVIDIA_DRIVER_CAPABILITIES=compute,utility
