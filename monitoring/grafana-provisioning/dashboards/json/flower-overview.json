@@ -8,7 +8,7 @@
     ],
     "timezone": "browser",
     "schemaVersion": 38,
-    "version": 5,
+    "version": 10,
     "refresh": "10s",
     "panels": [
         {
@@ -29,11 +29,11 @@
             },
             "targets": [
                 {
-                    "expr": "sum(rate(container_cpu_usage_seconds_total{name=~\".*fl-clientapp.*\"}[1m])) * 100",
+                    "expr": "sum(rate(container_cpu_usage_seconds_total{job=\"cadvisor-client\", name=~\".*fl-clientapp.*\"}[1m])) * 100",
                     "legendFormat": "ClientApp CPU %"
                 },
                 {
-                    "expr": "sum(rate(container_cpu_usage_seconds_total{name=~\".*fl-supernode.*\"}[1m])) * 100",
+                    "expr": "sum(rate(container_cpu_usage_seconds_total{job=\"cadvisor-client\", name=~\".*fl-supernode.*\"}[1m])) * 100",
                     "legendFormat": "SuperNode CPU %"
                 }
             ]
@@ -56,11 +56,11 @@
             },
             "targets": [
                 {
-                    "expr": "sum(container_memory_usage_bytes{name=~\".*fl-clientapp.*\"})",
+                    "expr": "sum(container_memory_usage_bytes{job=\"cadvisor-client\", name=~\".*fl-clientapp.*\"})",
                     "legendFormat": "ClientApp"
                 },
                 {
-                    "expr": "sum(container_memory_usage_bytes{name=~\".*fl-supernode.*\"})",
+                    "expr": "sum(container_memory_usage_bytes{job=\"cadvisor-client\", name=~\".*fl-supernode.*\"})",
                     "legendFormat": "SuperNode"
                 }
             ]
@@ -83,8 +83,8 @@
             },
             "targets": [
                 {
-                    "expr": "sum(rate(container_cpu_usage_seconds_total{name=~\".*fl-(superlink|serverapp).*\"}[1m])) * 100",
-                    "legendFormat": "Hub CPU %"
+                    "expr": "sum(rate(container_cpu_usage_seconds_total{job=\"cadvisor-hub\", id!=\"/\"}[1m])) * 100",
+                    "legendFormat": "Hub Total CPU %"
                 }
             ]
         },
@@ -106,8 +106,8 @@
             },
             "targets": [
                 {
-                    "expr": "sum(container_memory_usage_bytes{name=~\".*fl-(superlink|serverapp).*\"})",
-                    "legendFormat": "Hub RAM"
+                    "expr": "sum(container_memory_usage_bytes{job=\"cadvisor-hub\", id!=\"/\"})",
+                    "legendFormat": "Hub Total RAM"
                 }
             ]
         },
@@ -129,12 +129,12 @@
             },
             "targets": [
                 {
-                    "expr": "sum by (name) (rate(container_network_receive_bytes_total{name=~\".*fl-.*\"}[1m]))",
-                    "legendFormat": "{{name}} RX"
+                    "expr": "sum by (job, name, image) (rate(container_network_receive_bytes_total{id!=\"/\"}[1m]))",
+                    "legendFormat": "{{job}} {{name}}{{image}} RX"
                 },
                 {
-                    "expr": "sum by (name) (rate(container_network_transmit_bytes_total{name=~\".*fl-.*\"}[1m]))",
-                    "legendFormat": "{{name}} TX"
+                    "expr": "sum by (job, name, image) (rate(container_network_transmit_bytes_total{id!=\"/\"}[1m]))",
+                    "legendFormat": "{{job}} {{name}}{{image}} TX"
                 }
             ]
         },
@@ -162,11 +162,11 @@
             },
             "targets": [
                 {
-                    "expr": "avg(container_accelerator_duty_cycle{name=~\".*fl-clientapp.*\"})",
+                    "expr": "avg(container_accelerator_duty_cycle{job=\"cadvisor-client\"})",
                     "legendFormat": "GPU Utilization"
                 },
                 {
-                    "expr": "avg(container_accelerator_memory_used_bytes{name=~\".*fl-clientapp.*\"})",
+                    "expr": "avg(container_accelerator_memory_used_bytes{job=\"cadvisor-client\"})",
                     "legendFormat": "Memory"
                 }
             ]
