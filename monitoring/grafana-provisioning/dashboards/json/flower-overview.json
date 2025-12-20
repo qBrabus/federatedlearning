@@ -2,177 +2,87 @@
     "id": null,
     "uid": "flower-overview",
     "title": "Flower Federated Overview",
-    "tags": [
-        "flower",
-        "federated"
-    ],
+    "tags": ["flower", "federated"],
     "timezone": "browser",
     "schemaVersion": 38,
-    "version": 10,
+    "version": 15,
     "refresh": "10s",
     "panels": [
         {
             "id": 1,
             "type": "timeseries",
             "title": "CPU (Client Stack)",
-            "datasource": {
-                "type": "prometheus",
-                "uid": "Prometheus"
-            },
+            "datasource": { "type": "prometheus", "uid": "Prometheus" },
             "gridPos": { "h": 8, "w": 12, "x": 0, "y": 0 },
-            "fieldConfig": {
-                "defaults": { "unit": "percent" }
-            },
-            "options": {
-                "legend": { "displayMode": "list", "placement": "right" },
-                "tooltip": { "mode": "single" }
-            },
+            "fieldConfig": { "defaults": { "unit": "percent" } },
             "targets": [
-                {
-                    "expr": "sum(rate(container_cpu_usage_seconds_total{job=\"cadvisor-client\", name=~\".*fl-clientapp.*\"}[1m])) * 100",
-                    "legendFormat": "ClientApp CPU %"
-                },
-                {
-                    "expr": "sum(rate(container_cpu_usage_seconds_total{job=\"cadvisor-client\", name=~\".*fl-supernode.*\"}[1m])) * 100",
-                    "legendFormat": "SuperNode CPU %"
-                }
+                { "expr": "sum(rate(container_cpu_usage_seconds_total{job=\"cadvisor-client\", name=~\".*fl-clientapp.*\"}[1m])) * 100", "legendFormat": "ClientApp CPU %" },
+                { "expr": "sum(rate(container_cpu_usage_seconds_total{job=\"cadvisor-client\", name=~\".*fl-supernode.*\"}[1m])) * 100", "legendFormat": "SuperNode CPU %" }
             ]
         },
         {
             "id": 2,
             "type": "timeseries",
             "title": "Memory (Client Stack)",
-            "datasource": {
-                "type": "prometheus",
-                "uid": "Prometheus"
-            },
+            "datasource": { "type": "prometheus", "uid": "Prometheus" },
             "gridPos": { "h": 8, "w": 12, "x": 12, "y": 0 },
-            "fieldConfig": {
-                "defaults": { "unit": "bytes" }
-            },
-            "options": {
-                "legend": { "displayMode": "list", "placement": "right" },
-                "tooltip": { "mode": "single" }
-            },
+            "fieldConfig": { "defaults": { "unit": "bytes" } },
             "targets": [
-                {
-                    "expr": "sum(container_memory_usage_bytes{job=\"cadvisor-client\", name=~\".*fl-clientapp.*\"})",
-                    "legendFormat": "ClientApp"
-                },
-                {
-                    "expr": "sum(container_memory_usage_bytes{job=\"cadvisor-client\", name=~\".*fl-supernode.*\"})",
-                    "legendFormat": "SuperNode"
-                }
+                { "expr": "sum(container_memory_usage_bytes{job=\"cadvisor-client\", name=~\".*fl-clientapp.*\"})", "legendFormat": "ClientApp" },
+                { "expr": "sum(container_memory_usage_bytes{job=\"cadvisor-client\", name=~\".*fl-supernode.*\"})", "legendFormat": "SuperNode" }
             ]
         },
         {
             "id": 3,
             "type": "timeseries",
             "title": "CPU (Orchestrator & Hub)",
-            "datasource": {
-                "type": "prometheus",
-                "uid": "Prometheus"
-            },
+            "datasource": { "type": "prometheus", "uid": "Prometheus" },
             "gridPos": { "h": 8, "w": 12, "x": 0, "y": 8 },
-            "fieldConfig": {
-                "defaults": { "unit": "percent" }
-            },
-            "options": {
-                "legend": { "displayMode": "list", "placement": "right" },
-                "tooltip": { "mode": "single" }
-            },
+            "fieldConfig": { "defaults": { "unit": "percent" } },
             "targets": [
-                {
-                    "expr": "sum(rate(container_cpu_usage_seconds_total{job=\"cadvisor-hub\", id!=\"/\"}[1m])) * 100",
-                    "legendFormat": "Hub Total CPU %"
-                }
+                { "expr": "sum(rate(container_cpu_usage_seconds_total{job=\"cadvisor-hub\", id!=\"/\"}[1m])) * 100", "legendFormat": "Hub CPU (Global)" }
             ]
         },
         {
             "id": 4,
             "type": "timeseries",
             "title": "Memory (Orchestrator & Hub)",
-            "datasource": {
-                "type": "prometheus",
-                "uid": "Prometheus"
-            },
+            "datasource": { "type": "prometheus", "uid": "Prometheus" },
             "gridPos": { "h": 8, "w": 12, "x": 12, "y": 8 },
-            "fieldConfig": {
-                "defaults": { "unit": "bytes" }
-            },
-            "options": {
-                "legend": { "displayMode": "list", "placement": "right" },
-                "tooltip": { "mode": "single" }
-            },
+            "fieldConfig": { "defaults": { "unit": "bytes" } },
             "targets": [
-                {
-                    "expr": "sum(container_memory_usage_bytes{job=\"cadvisor-hub\", id!=\"/\"})",
-                    "legendFormat": "Hub Total RAM"
-                }
+                { "expr": "sum(container_memory_usage_bytes{job=\"cadvisor-hub\", id!=\"/\"})", "legendFormat": "Hub RAM (Global)" }
             ]
         },
         {
             "id": 5,
             "type": "timeseries",
             "title": "Network I/O (All Stacks)",
-            "datasource": {
-                "type": "prometheus",
-                "uid": "Prometheus"
-            },
+            "datasource": { "type": "prometheus", "uid": "Prometheus" },
             "gridPos": { "h": 8, "w": 24, "x": 0, "y": 16 },
-            "fieldConfig": {
-                "defaults": { "unit": "Bps" }
-            },
-            "options": {
-                "legend": { "displayMode": "table", "placement": "right" },
-                "tooltip": { "mode": "multi" }
-            },
+            "fieldConfig": { "defaults": { "unit": "Bps" } },
+            "options": { "legend": { "displayMode": "table", "placement": "right" } },
             "targets": [
-                {
-                    "expr": "sum by (job, name, image) (rate(container_network_receive_bytes_total{id!=\"/\"}[1m]))",
-                    "legendFormat": "{{job}} {{name}}{{image}} RX"
-                },
-                {
-                    "expr": "sum by (job, name, image) (rate(container_network_transmit_bytes_total{id!=\"/\"}[1m]))",
-                    "legendFormat": "{{job}} {{name}}{{image}} TX"
-                }
+                { "expr": "sum by (job, name, image) (rate(container_network_receive_bytes_total{id!=\"/\"}[1m]))", "legendFormat": "{{job}} {{name}}{{image}} RX" },
+                { "expr": "sum by (job, name, image) (rate(container_network_transmit_bytes_total{id!=\"/\"}[1m]))", "legendFormat": "{{job}} {{name}}{{image}} TX" }
             ]
         },
         {
             "id": 7,
             "type": "timeseries",
-            "title": "GPU (Client DGX)",
-            "datasource": {
-                "type": "prometheus",
-                "uid": "Prometheus"
-            },
+            "title": "GPU (DGX H200 - DCGM)",
+            "datasource": { "type": "prometheus", "uid": "Prometheus" },
             "gridPos": { "h": 8, "w": 24, "x": 0, "y": 24 },
             "fieldConfig": {
                 "defaults": { "unit": "percent" },
                 "overrides": [
-                    {
-                        "matcher": { "id": "byName", "options": "Memory" },
-                        "properties": [ { "id": "unit", "value": "bytes" } ]
-                    }
+                    { "matcher": { "id": "byName", "options": "VRAM Used" }, "properties": [{ "id": "unit", "value": "decbytes" }] }
                 ]
             },
-            "options": {
-                "legend": { "displayMode": "list", "placement": "right" },
-                "tooltip": { "mode": "single" }
-            },
             "targets": [
-                {
-                    "expr": "avg(container_accelerator_duty_cycle{job=\"cadvisor-client\"})",
-                    "legendFormat": "GPU Utilization"
-                },
-                {
-                    "expr": "avg(container_accelerator_memory_used_bytes{job=\"cadvisor-client\"})",
-                    "legendFormat": "Memory"
-                }
+                { "expr": "DCGM_FI_DEV_GPU_UTIL", "legendFormat": "GPU {{gpu}} Util %" },
+                { "expr": "DCGM_FI_DEV_FB_USED * 1024 * 1024", "legendFormat": "VRAM Used (GPU {{gpu}})" }
             ]
         }
-    ],
-    "templating": {
-        "list": []
-    }
+    ]
 }
