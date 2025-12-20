@@ -14,6 +14,8 @@ la synchronisation du dépôt, la génération des certificats TLS et le démarr
 - [Exécution locale (monohôte) pour test](#exécution-locale-monohôte-pour-test)
 - [Services Docker Compose](#services-docker-compose)
 - [Applications Flower](#applications-flower)
+- [Ajouter un nouveau site client](#ajouter-un-nouveau-site-client)
+- [Entraîner un modèle réel : workflow](#entraîner-un-modèle-réel--workflow)
 - [Monitoring](#monitoring)
 - [Logs, diagnostics et nettoyage](#logs-diagnostics-et-nettoyage)
 - [FAQ rapide](#faq-rapide)
@@ -149,6 +151,43 @@ Principaux services définis dans `compose.yaml` :
   - `learning-rate` / env `LEARNING_RATE` (défaut 0.01)
 - **Device** : sélection automatique `cuda` si disponible, sinon CPU.
 - **Entrée** : démarré via `client/run.sh` avec `flower-superexec --plugin-type clientapp --appio-api-address supernode:9094`.
+
+## Ajouter un nouveau site client
+Dans l'architecture Flower 1.x (SuperLink/SuperNode), chaque nouveau site est un SuperNode. Deux approches sont possibles :
+
+### Option manuelle (nouvelle machine)
+- Ajouter un nouvel hôte (ex. `site-B`) accessible en SSH et déclaré dans `~/.ssh/config`.
+- Exécuter `scripts/deploy.sh` en ciblant cet hôte (variable de contexte) ou adapter le script pour boucler sur une liste d'IP.
+
+### Option automatique (modification du script)
+Pour gérer plusieurs clients automatiquement, exposez une liste d'IP dans `.env` puis bouclez dans `scripts/deploy.sh` :
+
+```bash
+# Exemple de logique à ajouter dans deploy.sh
+IFS=',' read -ra ADDR <<< "$CLIENT_IPS"
+for IP in "${ADDR[@]}"; do
+  create_context "node-${IP}" "${IP}"
+  sync_repo "${IP}"
+  # Lancer uniquement le profil client sur ces nœuds
+  docker --context "node-${IP}" compose --profile client up -d --build
+done
+```
+
+### Sur la même machine (simulation)
+Pour tester plusieurs clients sur un seul hôte, utilisez `docker compose --scale` ou dupliquez les blocs `supernode` et `clientapp` dans `compose.yaml` en adaptant les noms/ports de conteneurs pour éviter les collisions.
+
+## Entraîner un modèle réel : workflow
+Le dépôt s'appuie sur des données synthétiques pour la démonstration. Pour un projet réel :
+
+1. **Préparer les données locales** : placer les jeux de données sur chaque machine client (ex. `./data`) et monter ce dossier dans `compose.yaml` pour le service `clientapp`.
+2. **Adapter le client** (`client/app/client.py`) :
+   - Remplacer `SimpleNet` par le modèle cible (ResNet, BERT, etc.).
+   - Remplacer `generate_synthetic_data` par un chargement des données locales (CSV, images, etc.).
+3. **Adapter l'orchestrateur** (`orchestrator/app/server.py`) :
+   - Choisir une stratégie adaptée (`FedProx`, `FedOpt`, etc.).
+   - Ajuster les paramètres de participation (`min_fit_clients`, etc.).
+4. **Lancer l'entraînement** : avec Flower 1.x, serveur et clients tournent en tâche de fond (via `flower-superexec`). Une commande
+   `flwr run` ou la connexion du nombre requis de clients déclenche l'entraînement selon la configuration définie dans `server.py`.
 
 ## Monitoring
 - **Prometheus**
