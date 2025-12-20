@@ -80,8 +80,6 @@ services:
     profiles: [monitor]
     container_name: fl-cadvisor
     privileged: true
-    command:
-      - "--nldm_gpu_metrics"
     environment:
       - NVIDIA_VISIBLE_DEVICES=all
       - NVIDIA_DRIVER_CAPABILITIES=compute,utility
