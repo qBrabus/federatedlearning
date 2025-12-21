@@ -41,6 +41,7 @@ Admin Ubuntu                      Proxy / Hub                         DGX / Supe
 ├── .env.example                   # Variables partagées (copier en .env)
 ├── scripts/
 │   ├── deploy.sh                  # Déploiement automatisé via Docker Context + rsync
+│   ├── remove.sh                  # Supprime les éléments déployé
 │   └── generate_certs.sh          # Génération CA + certificats TLS serveur/client
 ├── orchestrator/                  # ServerApp Flower (hub)
 │   ├── Dockerfile
