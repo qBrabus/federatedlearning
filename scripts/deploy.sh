@@ -21,33 +21,12 @@ source "$ENV_FILE"
 set +a
 
 : "${PROXY_IP:?[deploy] PROXY_IP doit être défini dans .env}"
-: "${DGX_IP:?[deploy] DGX_IP doit être défini dans .env}"
+: "${CLIENT_SITES:?[deploy] CLIENT_SITES doit être défini dans .env}"
 HUB_PORT=${HUB_PORT:-8443}
 GRAFANA_PORT=${GRAFANA_PORT:-3000}
 PROMETHEUS_PORT=${PROMETHEUS_PORT:-9090}
 DEPLOY_LOG_FOLLOW=${DEPLOY_LOG_FOLLOW:-false}
 DEPLOY_LOG_TIMEOUT=${DEPLOY_LOG_TIMEOUT:-60}
-
-PROM_TEMPLATE="${ROOT_DIR}/monitoring/prometheus.tmpl.yml"
-PROM_RENDERED="${ROOT_DIR}/monitoring/prometheus/prometheus.yml"
-
-PROM_TEMPLATE="$PROM_TEMPLATE" PROM_RENDERED="$PROM_RENDERED" python - <<'PY'
-from pathlib import Path
-import os
-
-Path(os.environ["PROM_RENDERED"]).parent.mkdir(parents=True, exist_ok=True)
-
-template = Path(os.environ["PROM_TEMPLATE"]).read_text()
-values = {
-    "PROXY_IP": os.getenv("PROXY_IP", "127.0.0.1"),
-    "DGX_IP": os.getenv("DGX_IP", "127.0.0.1"),
-}
-rendered = template
-for key, val in values.items():
-    rendered = rendered.replace(f"${{{key}}}", val)
-Path(os.environ["PROM_RENDERED"]).write_text(rendered)
-print(f"[deploy] Fichier Prometheus rendu vers {os.environ['PROM_RENDERED']}")
-PY
 
 create_context() {
   local name=$1
@@ -59,9 +38,6 @@ create_context() {
     echo "[deploy] Contexte docker ${name} déjà présent"
   fi
 }
-
-create_context proxy-node "proxy-data"
-create_context dgx-node "dgx"
 
 sync_repo() {
   local target=$1
@@ -124,12 +100,6 @@ ensure_rsync() {
   exit 1
 }
 
-ensure_rsync proxy-data
-ensure_rsync dgx
-
-sync_repo proxy-data
-sync_repo dgx
-
 resolve_remote_path() {
   local target=$1
   local path=$2
@@ -137,20 +107,105 @@ resolve_remote_path() {
   ssh -o BatchMode=yes "$target" "mkdir -p ${path} && cd ${path} && pwd"
 }
 
-# Les services monitorant les métriques tournent sur le DGX : on utilise son chemin absolu
-# pour monter les dossiers de configuration dans Prometheus/Grafana.
-HOST_PROJECT_PATH=$(resolve_remote_path dgx "$REMOTE_PATH")
-export HOST_PROJECT_PATH
+generate_prometheus_config() {
+  CLIENT_SITES="$CLIENT_SITES" PROXY_IP="$PROXY_IP" python3 - <<'PY'
+import os
+from pathlib import Path
+
+try:
+    import yaml
+except ModuleNotFoundError as exc:  # pragma: no cover - runtime safeguard
+    raise SystemExit("[deploy] PyYAML est requis pour générer la configuration Prometheus") from exc
+
+sites_env = os.getenv("CLIENT_SITES", "")
+proxy_ip = os.getenv("PROXY_IP", "127.0.0.1")
+
+sites = [entry.split(":", 1) for entry in sites_env.split(",") if ":" in entry]
+
+config = {
+    "global": {"scrape_interval": "5s"},
+    "scrape_configs": [
+        {
+            "job_name": "cadvisor-hub",
+            "static_configs": [{"targets": [f"{proxy_ip}:8081"]}],
+        },
+        {
+            "job_name": "cadvisor-clients",
+            "static_configs": [{"targets": [f"{ip}:8080" for _, ip in sites]}],
+        },
+        {
+            "job_name": "dcgm-exporters",
+            "static_configs": [{"targets": [f"{ip}:9400" for _, ip in sites]}],
+        },
+    ],
+}
+
+prometheus_dir = Path("monitoring/prometheus")
+prometheus_dir.mkdir(parents=True, exist_ok=True)
+output_file = prometheus_dir / "prometheus.yml"
+output_file.write_text(yaml.dump(config, sort_keys=False))
+print(f"[deploy] Prometheus config updated with all sites: {output_file}")
+PY
+}
+
+create_context proxy-node "$PROXY_IP"
+
+ensure_rsync "$PROXY_IP"
+sync_repo "$PROXY_IP"
 
 echo "[deploy] Démarrage du hub sur le proxy (${PROXY_IP})"
 docker --context proxy-node compose --profile hub --project-directory "$PROJECT_DIR" up -d --build
 check_services_health proxy-node
 
-echo "[deploy] Démarrage du client + monitoring sur le DGX (${DGX_IP})"
-docker --context dgx-node compose --profile client --profile monitor --project-directory "$PROJECT_DIR" up -d --build
-check_services_health dgx-node
+IFS=',' read -ra SITES <<< "$CLIENT_SITES"
+if [[ ${#SITES[@]} -eq 0 ]]; then
+  echo "[deploy] Aucun site client fourni dans CLIENT_SITES" >&2
+  exit 1
+fi
+
+PRIMARY_SITE_IP=""
+
+for SITE_ENTRY in "${SITES[@]}"; do
+  SITE_NAME=${SITE_ENTRY%%:*}
+  SITE_IP=${SITE_ENTRY#*:}
+
+  if [[ -z "$SITE_NAME" || -z "$SITE_IP" || "$SITE_NAME" == "$SITE_IP" ]]; then
+    echo "[deploy] Entrée CLIENT_SITES invalide: ${SITE_ENTRY}" >&2
+    continue
+  fi
+
+  if [[ -z "$PRIMARY_SITE_IP" ]]; then
+    PRIMARY_SITE_IP="$SITE_IP"
+  fi
+
+  CONTEXT_NAME="ctx-${SITE_NAME}"
+
+  echo "-------------------------------------------------------"
+  echo "[deploy] Déploiement du site : ${SITE_NAME} (${SITE_IP})"
+  echo "-------------------------------------------------------"
+
+  ensure_rsync "$SITE_IP"
+  sync_repo "$SITE_IP"
+  create_context "$CONTEXT_NAME" "$SITE_IP"
+
+  CURRENT_HOST_PATH=$(resolve_remote_path "$SITE_IP" "$REMOTE_PATH")
+
+  HOST_PROJECT_PATH="$CURRENT_HOST_PATH" SITE_NAME="$SITE_NAME" \
+    docker --context "$CONTEXT_NAME" compose \
+      --profile client \
+      --profile monitor \
+      --project-directory "$PROJECT_DIR" \
+      up -d --build
+
+  check_services_health "$CONTEXT_NAME"
+
+done
+
+generate_prometheus_config
 
 echo "✅ Déploiement terminé"
 echo "🔗 Hub Fleet API: http://${PROXY_IP}:${HUB_PORT}"
-echo "📊 Grafana: http://${DGX_IP}:${GRAFANA_PORT} (admin/admin)"
-echo "📈 Prometheus: http://${DGX_IP}:${PROMETHEUS_PORT}"
+if [[ -n "$PRIMARY_SITE_IP" ]]; then
+  echo "📊 Grafana: http://${PRIMARY_SITE_IP}:${GRAFANA_PORT} (admin/admin)"
+  echo "📈 Prometheus: http://${PRIMARY_SITE_IP}:${PROMETHEUS_PORT}"
+fi

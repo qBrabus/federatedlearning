@@ -1,17 +1,16 @@
+# Placeholder for local runs; overwritten by scripts/deploy.sh when deploying remotely.
 global:
   scrape_interval: 5s
 
 scrape_configs:
-  # Monitoring des conteneurs sur le DGX (Local)
-  - job_name: 'cadvisor-client'
-    static_configs:
-      - targets: ['${DGX_IP}:8080']
-
-  # Monitoring des conteneurs sur le Proxy (Distant)
   - job_name: 'cadvisor-hub'
     static_configs:
       - targets: ['${PROXY_IP}:8081']
-      
-  - job_name: 'dcgm-exporter'
+
+  - job_name: 'cadvisor-clients'
     static_configs:
-      - targets: ['${DGX_IP}:9400']
+      - targets: ['cadvisor:8080']
+
+  - job_name: 'dcgm-exporters'
+    static_configs:
+      - targets: ['dcgm-exporter:9400']
