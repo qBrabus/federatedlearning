@@ -4,6 +4,8 @@ services:
     profiles: [monitor]
     container_name: fl-dcgm-exporter
     restart: always
+    labels:
+      - "fl-site=${SITE_NAME:-unknown}"
     ports:
       - "9400:9400"
     cap_add:
@@ -53,6 +55,8 @@ services:
     image: flwr/supernode:${FLWR_VERSION}
     profiles: [client]
     container_name: fl-supernode
+    labels:
+      - "fl-site=${SITE_NAME:-unknown}"
     # CORRECTION : Suppression du nom du binaire et correction du flag API
     command:
       ["--superlink", "${PROXY_IP}:${HUB_PORT}", "--clientappio-api-address", "0.0.0.0:9094", "--insecure"]
@@ -61,6 +65,8 @@ services:
     build: ./client
     profiles: [client]
     container_name: fl-clientapp
+    labels:
+      - "fl-site=${SITE_NAME:-unknown}"
     depends_on:
       - supernode
     environment:
@@ -79,6 +85,8 @@ services:
     image: gcr.io/cadvisor/cadvisor:latest
     profiles: [monitor]
     container_name: fl-cadvisor
+    labels:
+      - "fl-site=${SITE_NAME:-unknown}"
     privileged: true
     environment:
       - NVIDIA_VISIBLE_DEVICES=all
@@ -121,6 +129,8 @@ services:
     image: prom/prometheus:latest
     profiles: [monitor]
     container_name: fl-prometheus
+    labels:
+      - "fl-site=${SITE_NAME:-unknown}"
     volumes:
       - ${HOST_PROJECT_PATH:-.}/monitoring/prometheus:/etc/prometheus:ro
     ports:
@@ -130,6 +140,8 @@ services:
     image: grafana/grafana:latest
     profiles: [monitor]
     container_name: fl-grafana
+    labels:
+      - "fl-site=${SITE_NAME:-unknown}"
     ports:
       - "${GRAFANA_PORT}:3000"
     environment:

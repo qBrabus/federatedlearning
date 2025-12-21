@@ -22,16 +22,15 @@ la synchronisation du dépôt, la génération des certificats TLS et le démarr
 
 ## Architecture et composants
 ```
-Admin Ubuntu                      Proxy / Hub                         DGX / SuperNode + GPU
-------------------------------    --------------------------------    ------------------------------------
 - Docker CLI + contexts           - superlink (Fleet API 8080)        - supernode (connecté au hub)
 - scripts/deploy.sh               - serverapp (FedAvg)                - clientapp (PyTorch + Flower client)
 - scripts/generate_certs.sh       - cadvisor-hub (metrics)            - dcgm-exporter (metrics GPU)
                                   - ports hub : 8080/9091/9093        - cadvisor (metrics conteneurs)
                                                                       - prometheus + grafana
+                                                                        (1 stack monitoring par site)
 ```
-- **Profiles Compose** : `hub` (proxy), `client` (DGX), `monitor` (DGX). Ils peuvent être lancés ensemble ou séparément.
-- **Réseau** : le SuperNode se connecte au SuperLink via `${PROXY_IP}:${HUB_PORT}` ; les AppIo internes utilisent les ports
+- **Profiles Compose** : `hub` (proxy), `client` (sites GPU), `monitor` (par site). Ils peuvent être lancés ensemble ou séparément.
+- **Réseau** : chaque SuperNode se connecte au SuperLink via `${PROXY_IP}:${HUB_PORT}` ; les AppIo internes utilisent les ports
   9091 (hub) et 9094 (client) exposés uniquement sur le réseau docker.
 
 ## Arborescence du dépôt
@@ -40,9 +39,9 @@ Admin Ubuntu                      Proxy / Hub                         DGX / Supe
 ├── compose.yaml                   # Orchestration hub/client/monitoring via profils
 ├── .env.example                   # Variables partagées (copier en .env)
 ├── scripts/
-│   ├── deploy.sh                  # Déploiement automatisé via Docker Context + rsync
+│   ├── deploy.sh                  # Déploiement automatisé multi-sites via Docker Context + rsync
 │   ├── remove.sh                  # Supprime les éléments déployé
-│   └── generate_certs.sh          # Génération CA + certificats TLS serveur/client
+│   └── generate_certs.sh          # Génération CA + certificats TLS serveur/client(s)
 ├── orchestrator/                  # ServerApp Flower (hub)
 │   ├── Dockerfile
 │   ├── app/server.py              # FedAvg, rounds pilotables via NUM_ROUNDS/run_config
@@ -52,7 +51,7 @@ Admin Ubuntu                      Proxy / Hub                         DGX / Supe
 │   ├── app/client.py              # NumPyClient avec données synthétiques, hyperparams dynamiques
 │   └── run.sh                     # Lance flower-superexec vers le SuperNode local
 └── monitoring/
-    ├── prometheus.tmpl.yml        # Template Prometheus (rendu avec IP proxy/DGX)
+    ├── prometheus.tmpl.yml        # Exemple local (écrasé par deploy.sh en prod)
     ├── prometheus/prometheus.yml  # Fichier généré/utilisé par le conteneur
     └── grafana-provisioning/      # Datasource + dashboard « Flower Federated Overview »
 ```
@@ -60,10 +59,11 @@ Admin Ubuntu                      Proxy / Hub                         DGX / Supe
 ## Prérequis
 - Poste d'**administration Ubuntu** avec Docker et le plugin Docker Compose.
 - Accès **SSH sans mot de passe** vers :
-  - `proxy-data` (héberge le SuperLink/hub) → IP `${PROXY_IP}`
-  - `dgx` (héberge le SuperNode + client + monitoring) → IP `${DGX_IP}`
-- GPU NVIDIA et runtime CUDA actifs sur le DGX (images `pytorch/pytorch` + `dcgm-exporter`).
-- Fichier `~/.ssh/config` configuré pour les hôtes `proxy-data` et `dgx` (utilisateur, clé, etc.).
+  - le proxy/hub (`${PROXY_IP}`)
+  - chaque site client listé dans `${CLIENT_SITES}` (voir Configuration)
+- GPU NVIDIA et runtime CUDA actifs sur chaque site client (images `pytorch/pytorch` + `dcgm-exporter`).
+- Fichier `~/.ssh/config` configuré pour le proxy et les sites (utilisateur, clé, etc.).
+- Python 3 + module PyYAML installés sur le poste d'admin (utilisés par `scripts/deploy.sh`).
 - (Optionnel) Accès sudo sur les hôtes pour installer `rsync` si absent.
 
 ## Configuration
@@ -72,7 +72,7 @@ Admin Ubuntu                      Proxy / Hub                         DGX / Supe
    cp .env.example .env
    ```
 2. Ajustez les variables clés :
-   - **Réseau** : `PROXY_IP`, `DGX_IP`, `HUB_PORT`
+   - **Réseau** : `PROXY_IP`, `CLIENT_SITES` (format `nom:ip,nom2:ip2`), `HUB_PORT`
    - **Flower** : `FLWR_VERSION` (1.25.0), `NUM_ROUNDS` (rounds serveur)
    - **Hyperparamètres client** : `BATCH_SIZE`, `LEARNING_RATE` (utilisés par `client/app/client.py`)
    - **Monitoring** : `GRAFANA_PORT`, `PROMETHEUS_PORT`
@@ -86,11 +86,10 @@ Exécuté depuis le poste admin (répertoire racine du dépôt).
 chmod +x scripts/deploy.sh scripts/generate_certs.sh
 ```
 
-2) (Optionnel) Générer les certificats TLS (SuperLink/ SuperNode) :
+2) (Optionnel) Générer les certificats TLS (SuperLink / SuperNode) :
 ```bash
-./scripts/generate_certs.sh \
-  SERVER_SAN="IP:${PROXY_IP},DNS:proxy" \
-  CLIENT_SAN="IP:${DGX_IP},DNS:dgx"
+./scripts/generate_certs.sh                              # génère la CA + un client "client"
+./scripts/generate_certs.sh site-lyon CLIENT_SAN="IP:10.0.0.10"  # exemple : certificat client dédié
 ```
 Les certificats sont placés dans `certs/` (non versionné).
 
@@ -99,17 +98,17 @@ Les certificats sont placés dans `certs/` (non versionné).
 ./scripts/deploy.sh
 ```
 Le script :
-- charge `.env` et **rend** `monitoring/prometheus/prometheus.yml` depuis `monitoring/prometheus.tmpl.yml` avec les IP réelles ;
+- charge `.env` (proxy + liste des sites clients) ;
 - vérifie/installe `rsync` sur chaque hôte ;
-- crée les **Docker Contexts** `proxy-node` et `dgx-node` (SSH) si absents ;
+- crée les **Docker Contexts** `proxy-node` puis `ctx-<site>` pour chaque entrée `nom:ip` ;
 - synchronise le dépôt sur chaque hôte (`rsync --delete`) ;
-- démarre les profils Compose : hub sur le proxy, client + monitoring sur le DGX ;
-- affiche les URLs utiles à la fin du déploiement.
+- déploie le hub sur le proxy, puis **boucle sur tous les sites** pour démarrer les profils `client` + `monitor` ;
+- génère un `monitoring/prometheus/prometheus.yml` qui référence automatiquement chaque site ;
+- affiche les URLs utiles (Hub + premier site pour Grafana/Prometheus) en fin de déploiement.
 
 4) Points d'accès après déploiement :
 - Fleet API hub : `http://${PROXY_IP}:${HUB_PORT}`
-- Grafana : `http://${DGX_IP}:${GRAFANA_PORT}` (admin/admin par défaut)
-- Prometheus : `http://${DGX_IP}:${PROMETHEUS_PORT}`
+- Grafana / Prometheus : `http://<IP_site_client>:{${GRAFANA_PORT}|${PROMETHEUS_PORT}}` (par défaut le premier site de la liste)
 
 ## Exécution locale (monohôte) pour test
 Pour expérimenter sans SSH (tout sur la même machine) :
@@ -132,9 +131,10 @@ Principaux services définis dans `compose.yaml` :
 - **supernode** (`client`) : image `flwr/supernode:${FLWR_VERSION}` ; se connecte au SuperLink via `${PROXY_IP}:${HUB_PORT}`.
 - **clientapp** (`client`) : build `./client` ; PyTorch + Flower NumPyClient ; hyperparamètres via env ou `run_config`.
 - **dcgm-exporter** (`monitor`) : expose les métriques GPU (9400).
-- **cadvisor / cadvisor-hub** (`monitor`) : métriques CPU/Mem/Réseau des conteneurs côté DGX et proxy.
+- **cadvisor / cadvisor-hub** (`monitor`) : métriques CPU/Mem/Réseau des conteneurs côté clients et proxy.
 - **prometheus** (`monitor`) : charge `monitoring/prometheus/prometheus.yml` (montage en lecture seule).
 - **grafana** (`monitor`) : provisionne datasource Prometheus et dashboard par défaut, persistance via volume `grafana-storage`.
+> Astuce : les services côté clients embarquent le label Docker `fl-site=${SITE_NAME}` pour filtrer facilement par site dans les métriques.
 
 ## Applications Flower
 ### Orchestrateur (ServerApp)
@@ -154,25 +154,13 @@ Principaux services définis dans `compose.yaml` :
 - **Entrée** : démarré via `client/run.sh` avec `flower-superexec --plugin-type clientapp --appio-api-address supernode:9094`.
 
 ## Ajouter un nouveau site client
-Dans l'architecture Flower 1.x (SuperLink/SuperNode), chaque nouveau site est un SuperNode. Deux approches sont possibles :
+Déclarer un site revient à l'ajouter dans `.env` (format `nom:ip`) puis à relancer `scripts/deploy.sh` ; le script synchronise le dépôt, crée le contexte Docker `ctx-<nom>` et démarre les profils `client` + `monitor` sur ce nœud.
 
-### Option manuelle (nouvelle machine)
-- Ajouter un nouvel hôte (ex. `site-B`) accessible en SSH et déclaré dans `~/.ssh/config`.
-- Exécuter `scripts/deploy.sh` en ciblant cet hôte (variable de contexte) ou adapter le script pour boucler sur une liste d'IP.
-
-### Option automatique (modification du script)
-Pour gérer plusieurs clients automatiquement, exposez une liste d'IP dans `.env` puis bouclez dans `scripts/deploy.sh` :
-
-```bash
-# Exemple de logique à ajouter dans deploy.sh
-IFS=',' read -ra ADDR <<< "$CLIENT_IPS"
-for IP in "${ADDR[@]}"; do
-  create_context "node-${IP}" "${IP}"
-  sync_repo "${IP}"
-  # Lancer uniquement le profil client sur ces nœuds
-  docker --context "node-${IP}" compose --profile client up -d --build
-done
+Exemple :
+```env
+CLIENT_SITES="site-lyon:10.200.50.45,site-paris:10.200.50.46,site-lille:10.200.50.60"
 ```
+Après mise à jour de `.env`, relancer `./scripts/deploy.sh` déploie automatiquement le nouveau site et met à jour la configuration Prometheus.
 
 ### Sur la même machine (simulation)
 Pour tester plusieurs clients sur un seul hôte, utilisez `docker compose --scale` ou dupliquez les blocs `supernode` et `clientapp` dans `compose.yaml` en adaptant les noms/ports de conteneurs pour éviter les collisions.
@@ -192,9 +180,8 @@ Le dépôt s'appuie sur des données synthétiques pour la démonstration. Pour 
 
 ## Monitoring
 - **Prometheus**
-  - Template : `monitoring/prometheus.tmpl.yml` (IP paramétrables via `.env`).
-  - Fichier monté : `monitoring/prometheus/prometheus.yml` (généré par `deploy.sh`).
-  - Scrape : `cadvisor` (client), `cadvisor-hub` (proxy), `dcgm-exporter` (GPU DGX).
+  - `scripts/deploy.sh` génère un `monitoring/prometheus/prometheus.yml` dynamique listant tous les sites clients à partir de `CLIENT_SITES`.
+  - Scrape : `cadvisor` (clients), `cadvisor-hub` (proxy), `dcgm-exporter` (GPU des sites).
 - **Grafana**
   - Datasource provisionnée : `Prometheus` (`monitoring/grafana-provisioning/datasources/datasource.yml`).
   - Dashboard : `Flower Federated Overview` (`monitoring/grafana-provisioning/dashboards/json/flower-overview.json`).
@@ -204,11 +191,11 @@ Le dépôt s'appuie sur des données synthétiques pour la démonstration. Pour 
 - **Vérifier les conteneurs après déploiement** :
   ```bash
   docker --context proxy-node ps --filter "name=fl-"
-  docker --context dgx-node ps --filter "name=fl-"
+  docker --context ctx-<site> ps --filter "name=fl-"   # répéter pour chaque site
   ```
 - **Logs** :
   - Hub : `docker --context proxy-node logs -f fl-serverapp`
-  - Client : `docker --context dgx-node logs -f fl-clientapp`
+  - Client : `docker --context ctx-<site> logs -f fl-clientapp`
 - **Diagnostic santé (deploy.sh)** : le script remonte les services `exited` ou `unhealthy` et affiche leurs logs (optionnellement en suivi temps réel via `DEPLOY_LOG_FOLLOW=true`).
 - **Rapports Flower** (proxy) :
   ```bash
@@ -217,7 +204,7 @@ Le dépôt s'appuie sur des données synthétiques pour la démonstration. Pour 
 - **Nettoyage** :
   ```bash
   docker compose --profile hub down                 # Proxy
-  docker compose --profile client --profile monitor down   # DGX
+  docker compose --profile client --profile monitor down   # Client local (simulation)
   ```
 
 ## FAQ rapide

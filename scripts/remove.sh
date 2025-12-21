@@ -17,8 +17,12 @@ set +a
 # Variables de nettoyage
 REMOTE_PATH=${REMOTE_PATH:-"~/federatedlearning"}
 PROJECT_DIR="$ROOT_DIR"
+: "${PROXY_IP:?[remove] PROXY_IP doit être défini dans .env}"
 
-echo "⚠️  ATTENTION : Ce script va supprimer tous les conteneurs, volumes et images liés à ce projet sur le Proxy et le DGX."
+CLIENT_SITES=${CLIENT_SITES:-""}
+IFS=',' read -ra SITES <<< "$CLIENT_SITES"
+
+echo "⚠️  ATTENTION : Ce script va supprimer tous les conteneurs, volumes et images liés à ce projet sur le Proxy et les sites clients."
 read -p "Voulez-vous continuer ? (y/N) " -n 1 -r
 echo
 if [[ ! $REPLY =~ ^[Yy]$ ]]; then
@@ -26,16 +30,22 @@ if [[ ! $REPLY =~ ^[Yy]$ ]]; then
     exit 0
 fi
 
-# --- NETTOYAGE DGX (Client + Monitor) ---
-if docker context ls | grep -q "dgx-node"; then
-    echo "[remove] Arrêt et suppression (conteneurs, volumes, images) sur le DGX..."
-    # -v : supprime les volumes (grafana-storage, etc.)
-    # --rmi local : supprime les images construites (clientapp)
-    # --remove-orphans : nettoie les services qui auraient pu être renommés
-    docker --context dgx-node compose --profile client --profile monitor --project-directory "$PROJECT_DIR" down -v --rmi local --remove-orphans || echo "Échec partiel sur DGX, continuant..."
-else
-    echo "[remove] Contexte dgx-node non trouvé, passage."
-fi
+# --- NETTOYAGE CLIENTS (Client + Monitor) ---
+for SITE_ENTRY in "${SITES[@]}"; do
+    SITE_NAME=${SITE_ENTRY%%:*}
+    CONTEXT_NAME="ctx-${SITE_NAME}"
+
+    if [[ -z "$SITE_NAME" ]]; then
+        continue
+    fi
+
+    if docker context ls | grep -q "${CONTEXT_NAME}"; then
+        echo "[remove] Arrêt et suppression sur ${SITE_NAME} (${CONTEXT_NAME})..."
+        docker --context "$CONTEXT_NAME" compose --profile client --profile monitor --project-directory "$PROJECT_DIR" down -v --rmi local --remove-orphans || echo "Échec partiel sur ${SITE_NAME}, continuant..."
+    else
+        echo "[remove] Contexte ${CONTEXT_NAME} non trouvé, passage."
+    fi
+done
 
 # --- NETTOYAGE PROXY (Hub) ---
 if docker context ls | grep -q "proxy-node"; then
@@ -56,15 +66,25 @@ read -p "Voulez-vous supprimer les fichiers sources sur les serveurs distants ($
 echo
 if [[ $REPLY =~ ^[Yy]$ ]]; then
     echo "[remove] Suppression des répertoires distants..."
-    ssh proxy-data "rm -rf ${REMOTE_PATH}" || echo "Échec suppression dossier sur proxy"
-    ssh dgx "rm -rf ${REMOTE_PATH}" || echo "Échec suppression dossier sur dgx"
+    ssh "$PROXY_IP" "rm -rf ${REMOTE_PATH}" || echo "Échec suppression dossier sur proxy"
+    for SITE_ENTRY in "${SITES[@]}"; do
+        SITE_IP=${SITE_ENTRY#*:}
+        [[ -z "$SITE_IP" ]] && continue
+        ssh "$SITE_IP" "rm -rf ${REMOTE_PATH}" || echo "Échec suppression dossier sur ${SITE_IP}"
+    done
 fi
 
 # --- SUPPRESSION DES CONTEXTES DOCKER ---
-read -p "Voulez-vous supprimer les Docker Contexts (proxy-node, dgx-node) ? (y/N) " -n 1 -r
+read -p "Voulez-vous supprimer les Docker Contexts (proxy-node, ctx-<site>) ? (y/N) " -n 1 -r
 echo
 if [[ $REPLY =~ ^[Yy]$ ]]; then
-    docker context rm proxy-node dgx-node || true
+    CONTEXTS=(proxy-node)
+    for SITE_ENTRY in "${SITES[@]}"; do
+        SITE_NAME=${SITE_ENTRY%%:*}
+        [[ -z "$SITE_NAME" ]] && continue
+        CONTEXTS+=("ctx-${SITE_NAME}")
+    done
+    docker context rm "${CONTEXTS[@]}" || true
 fi
 
 echo "✅ Nettoyage terminé."
