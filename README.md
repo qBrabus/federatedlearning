@@ -24,12 +24,12 @@ la synchronisation du dépôt, la génération des certificats TLS et le démarr
 ```
 - Docker CLI + contexts           - superlink (Fleet API 8080)        - supernode (connecté au hub)
 - scripts/deploy.sh               - serverapp (FedAvg)                - clientapp (PyTorch + Flower client)
-- scripts/generate_certs.sh       - cadvisor-hub (metrics)            - dcgm-exporter (metrics GPU)
+- scripts/generate_certs.sh       - cadvisor-hub (metrics)            - dcgm-exporter (metrics GPU si dispo)
                                   - ports hub : 8080/9091/9093        - cadvisor (metrics conteneurs)
                                                                       - prometheus + grafana
                                                                         (1 stack monitoring par site)
 ```
-- **Profiles Compose** : `hub` (proxy), `client` (sites GPU), `monitor` (par site). Ils peuvent être lancés ensemble ou séparément.
+- **Profiles Compose** : `hub` (proxy), `client` (sites), `monitor` (par site) et `monitor-gpu` (ajouté automatiquement quand un GPU est détecté). Ils peuvent être lancés ensemble ou séparément.
 - **Réseau** : chaque SuperNode se connecte au SuperLink via `${PROXY_IP}:${HUB_PORT}` ; les AppIo internes utilisent les ports
   9091 (hub) et 9094 (client) exposés uniquement sur le réseau docker.
 
@@ -37,6 +37,7 @@ la synchronisation du dépôt, la génération des certificats TLS et le démarr
 ```
 .
 ├── compose.yaml                   # Orchestration hub/client/monitoring via profils
+├── compose.gpu.yaml               # Surcharge facultative pour activer GPU/monitoring DCGM quand disponible
 ├── .env.example                   # Variables partagées (copier en .env)
 ├── scripts/
 │   ├── deploy.sh                  # Déploiement automatisé multi-sites via Docker Context + rsync
@@ -61,7 +62,7 @@ la synchronisation du dépôt, la génération des certificats TLS et le démarr
 - Accès **SSH sans mot de passe** vers :
   - le proxy/hub (`${PROXY_IP}`)
   - chaque site client listé dans `${CLIENT_SITES}` (voir Configuration)
-- GPU NVIDIA et runtime CUDA actifs sur chaque site client (images `pytorch/pytorch` + `dcgm-exporter`).
+- GPU NVIDIA et runtime CUDA **recommandés** sur les sites clients (pour accélérer l'entraînement et activer `dcgm-exporter`). En leur absence, le déploiement reste fonctionnel en CPU.
 - Fichier `~/.ssh/config` configuré pour le proxy et les sites (utilisateur, clé, etc.).
 - Python 3 + module PyYAML installés sur le poste d'admin (utilisés par `scripts/deploy.sh`).
 - (Optionnel) Accès sudo sur les hôtes pour installer `rsync` si absent.
@@ -103,6 +104,7 @@ Le script :
 - crée les **Docker Contexts** `proxy-node` puis `ctx-<site>` pour chaque entrée `nom:ip` ;
 - synchronise le dépôt sur chaque hôte (`rsync --delete`) ;
 - déploie le hub sur le proxy, puis **boucle sur tous les sites** pour démarrer les profils `client` + `monitor` ;
+- détecte automatiquement la présence d'un GPU sur chaque site pour ajouter `compose.gpu.yaml` et le profil `monitor-gpu` le cas échéant ;
 - génère un `monitoring/prometheus/prometheus.yml` qui référence automatiquement chaque site ;
 - affiche les URLs utiles (Hub + premier site pour Grafana/Prometheus) en fin de déploiement.
 
@@ -117,7 +119,8 @@ docker compose --profile hub --profile client --profile monitor up -d --build
 ```
 - Le fichier `monitoring/prometheus/prometheus.yml` versionné pointe par défaut sur `cadvisor:8080` et `${PROXY_IP}:8081`.
   Pour surveiller le hub localement, assurez-vous que `PROXY_IP` vaut `127.0.0.1` ou regénérez le fichier via `scripts/deploy.sh`.
-- Les conteneurs utilisent les images locales construites (`orchestrator`, `client`) ; GPU requis pour `clientapp`.
+- Sur une machine équipée d'un GPU et du runtime NVIDIA, ajoutez `-f compose.gpu.yaml --profile monitor-gpu` pour activer les réservations GPU et le service `dcgm-exporter`. Sans GPU, la pile fonctionne automatiquement en CPU.
+- Les conteneurs utilisent les images locales construites (`orchestrator`, `client`). Par défaut, le déploiement tente d'activer le GPU ; s'il est absent, le client reste opérationnel en CPU et le GPU sera pris en compte automatiquement dès qu'il sera disponible.
 
 Arrêt local :
 ```bash
@@ -130,7 +133,7 @@ Principaux services définis dans `compose.yaml` :
 - **serverapp** (`hub`) : build `./orchestrator` ; exécute le ServerApp Flower FedAvg ; lit `NUM_ROUNDS` ou `run_config`.
 - **supernode** (`client`) : image `flwr/supernode:${FLWR_VERSION}` ; se connecte au SuperLink via `${PROXY_IP}:${HUB_PORT}`.
 - **clientapp** (`client`) : build `./client` ; PyTorch + Flower NumPyClient ; hyperparamètres via env ou `run_config`.
-- **dcgm-exporter** (`monitor`) : expose les métriques GPU (9400).
+- **dcgm-exporter** (`monitor-gpu`) : expose les métriques GPU (9400) uniquement quand un GPU est détecté.
 - **cadvisor / cadvisor-hub** (`monitor`) : métriques CPU/Mem/Réseau des conteneurs côté clients et proxy.
 - **prometheus** (`monitor`) : charge `monitoring/prometheus/prometheus.yml` (montage en lecture seule).
 - **grafana** (`monitor`) : provisionne datasource Prometheus et dashboard par défaut, persistance via volume `grafana-storage`.
@@ -150,7 +153,7 @@ Principaux services définis dans `compose.yaml` :
   - `n-local-epochs` (run_config) ou env `N_LOCAL_EPOCHS` (défaut 1)
   - `batch-size` / env `BATCH_SIZE` (défaut 64)
   - `learning-rate` / env `LEARNING_RATE` (défaut 0.01)
-- **Device** : sélection automatique `cuda` si disponible, sinon CPU.
+- **Device** : sélection automatique `cuda` si disponible, sinon CPU (le basculement est journalisé et automatique).
 - **Entrée** : démarré via `client/run.sh` avec `flower-superexec --plugin-type clientapp --appio-api-address supernode:9094`.
 
 ## Ajouter un nouveau site client
@@ -181,7 +184,7 @@ Le dépôt s'appuie sur des données synthétiques pour la démonstration. Pour 
 ## Monitoring
 - **Prometheus**
   - `scripts/deploy.sh` génère un `monitoring/prometheus/prometheus.yml` dynamique listant tous les sites clients à partir de `CLIENT_SITES`.
-  - Scrape : `cadvisor` (clients), `cadvisor-hub` (proxy), `dcgm-exporter` (GPU des sites).
+  - Scrape : `cadvisor` (clients), `cadvisor-hub` (proxy), `dcgm-exporter` (GPU des sites quand disponible).
 - **Grafana**
   - Datasource provisionnée : `Prometheus` (`monitoring/grafana-provisioning/datasources/datasource.yml`).
   - Dashboard : `Flower Federated Overview` (`monitoring/grafana-provisioning/dashboards/json/flower-overview.json`).
@@ -210,6 +213,5 @@ Le dépôt s'appuie sur des données synthétiques pour la démonstration. Pour 
 ## FAQ rapide
 - **Comment changer le nombre de rounds ?** Définir `NUM_ROUNDS` dans `.env` ou passer `run_config['num-server-rounds']` via la Fleet API.
 - **Comment ajuster le modèle ?** Modifier `client/app/client.py` (classe `SimpleNet` ou la génération de données) puis reconstruire `clientapp`.
-- **GPU non disponible ?** Le client bascule sur CPU automatiquement, mais le conteneur nécessite toujours l'image CUDA ; pour un test 100% CPU,
-  adapter l'image de base dans `client/Dockerfile`.
+- **GPU non disponible ?** Le déploiement détecte l'absence de GPU sur chaque site et démarre `clientapp` en mode CPU sans blocage. Dès qu'un GPU est ajouté, relancer `scripts/deploy.sh` activera automatiquement les réservations GPU et le service `dcgm-exporter` via `compose.gpu.yaml`.
 - **Quelles versions sont utilisées ?** Flower `1.25.0`, PyTorch `2.4.1-cuda12.4-cudnn9-runtime` côté client.

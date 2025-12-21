@@ -1,23 +1,4 @@
 services:
-  dcgm-exporter:
-    image: nvcr.io/nvidia/k8s/dcgm-exporter:3.3.5-3.4.0-ubuntu22.04
-    profiles: [monitor]
-    container_name: fl-dcgm-exporter
-    restart: always
-    labels:
-      - "fl-site=${SITE_NAME:-unknown}"
-    ports:
-      - "9400:9400"
-    cap_add:
-      - SYS_ADMIN
-    deploy:
-      resources:
-        reservations:
-          devices:
-            - driver: nvidia
-              count: all
-              capabilities: [gpu]
-
   superlink:
     image: flwr/superlink:${FLWR_VERSION}
     profiles: [hub]
@@ -73,13 +54,6 @@ services:
       - APPIO_API_ADDRESS=supernode:9094
       - BATCH_SIZE=${BATCH_SIZE}
       - LEARNING_RATE=${LEARNING_RATE}
-    deploy:
-      resources:
-        reservations:
-          devices:
-            - driver: nvidia
-              count: all
-              capabilities: [gpu]
 
   cadvisor:
     image: gcr.io/cadvisor/cadvisor:latest
@@ -88,16 +62,6 @@ services:
     labels:
       - "fl-site=${SITE_NAME:-unknown}"
     privileged: true
-    environment:
-      - NVIDIA_VISIBLE_DEVICES=all
-      - NVIDIA_DRIVER_CAPABILITIES=compute,utility
-    deploy:
-      resources:
-        reservations:
-          devices:
-            - driver: nvidia
-              count: all
-              capabilities: [gpu]
     devices:
       - /dev/kmsg
     volumes:
