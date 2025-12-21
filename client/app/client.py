@@ -1,11 +1,16 @@
 """ClientApp Flower."""
 
+import logging
 import os
 from flwr.client import ClientApp, NumPyClient
 from flwr.common import Context
 import torch
 from torch import nn, optim
 from torch.utils.data import DataLoader, TensorDataset
+
+
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 
 class SimpleNet(nn.Module):
@@ -96,7 +101,11 @@ def client_fn(context: Context):
     valloader = DataLoader(val_ds, batch_size=batch_size)
 
     model = SimpleNet()
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    cuda_available = torch.cuda.is_available()
+    device = torch.device("cuda" if cuda_available else "cpu")
+    logger.info("Périphérique sélectionné pour l'entraînement: %s", device)
+    if not cuda_available:
+        logger.warning("Aucun GPU détecté, bascule automatique sur le CPU (le GPU sera utilisé dès qu'il sera disponible).")
 
     return FlowerClient(model, trainloader, valloader, epochs, lr, device).to_client()
 

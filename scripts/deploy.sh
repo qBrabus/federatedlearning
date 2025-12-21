@@ -100,6 +100,16 @@ ensure_rsync() {
   exit 1
 }
 
+detect_remote_gpu() {
+  local target=$1
+
+  if ssh -o BatchMode=yes "$target" "command -v nvidia-smi >/dev/null 2>&1 && nvidia-smi -L >/dev/null 2>&1" >/dev/null 2>&1; then
+    echo "true"
+  else
+    echo "false"
+  fi
+}
+
 resolve_remote_path() {
   local target=$1
   local path=$2
@@ -108,7 +118,7 @@ resolve_remote_path() {
 }
 
 generate_prometheus_config() {
-  CLIENT_SITES="$CLIENT_SITES" PROXY_IP="$PROXY_IP" python3 - <<'PY'
+  CLIENT_SITES="$CLIENT_SITES" GPU_SITES="$GPU_SITES" PROXY_IP="$PROXY_IP" python3 - <<'PY'
 import os
 from pathlib import Path
 
@@ -118,9 +128,11 @@ except ModuleNotFoundError as exc:  # pragma: no cover - runtime safeguard
     raise SystemExit("[deploy] PyYAML est requis pour générer la configuration Prometheus") from exc
 
 sites_env = os.getenv("CLIENT_SITES", "")
+gpu_sites_env = os.getenv("GPU_SITES", "")
 proxy_ip = os.getenv("PROXY_IP", "127.0.0.1")
 
 sites = [entry.split(":", 1) for entry in sites_env.split(",") if ":" in entry]
+gpu_sites = [entry.split(":", 1) for entry in gpu_sites_env.split(",") if ":" in entry]
 
 config = {
     "global": {"scrape_interval": "5s"},
@@ -133,12 +145,17 @@ config = {
             "job_name": "cadvisor-clients",
             "static_configs": [{"targets": [f"{ip}:8080" for _, ip in sites]}],
         },
-        {
-            "job_name": "dcgm-exporters",
-            "static_configs": [{"targets": [f"{ip}:9400" for _, ip in sites]}],
-        },
     ],
 }
+
+dcgm_targets = [f"{ip}:9400" for _, ip in gpu_sites]
+if dcgm_targets:
+    config["scrape_configs"].append(
+        {
+            "job_name": "dcgm-exporters",
+            "static_configs": [{"targets": dcgm_targets}],
+        }
+    )
 
 prometheus_dir = Path("monitoring/prometheus")
 prometheus_dir.mkdir(parents=True, exist_ok=True)
@@ -164,6 +181,7 @@ if [[ ${#SITES[@]} -eq 0 ]]; then
 fi
 
 PRIMARY_SITE_IP=""
+GPU_SITES=()
 
 for SITE_ENTRY in "${SITES[@]}"; do
   SITE_NAME=${SITE_ENTRY%%:*}
@@ -189,18 +207,32 @@ for SITE_ENTRY in "${SITES[@]}"; do
   create_context "$CONTEXT_NAME" "$SITE_IP"
 
   CURRENT_HOST_PATH=$(resolve_remote_path "$SITE_IP" "$REMOTE_PATH")
+  GPU_PRESENT=$(detect_remote_gpu "$SITE_IP")
+
+  COMPOSE_FILES=(-f "$PROJECT_DIR/compose.yaml")
+  PROFILE_ARGS=(--profile client --profile monitor)
+
+  if [[ "$GPU_PRESENT" == "true" ]]; then
+    echo "[deploy] GPU détecté sur ${SITE_NAME} : activation des réservations GPU et des métriques DCGM"
+    COMPOSE_FILES+=(-f "$PROJECT_DIR/compose.gpu.yaml")
+    PROFILE_ARGS+=(--profile monitor-gpu)
+    GPU_SITES+=("${SITE_NAME}:${SITE_IP}")
+  else
+    echo "[deploy] Aucun GPU détecté sur ${SITE_NAME} : déploiement en mode CPU, le GPU sera pris en compte automatiquement si ajouté ultérieurement"
+  fi
 
   HOST_PROJECT_PATH="$CURRENT_HOST_PATH" SITE_NAME="$SITE_NAME" \
     docker --context "$CONTEXT_NAME" compose \
-      --profile client \
-      --profile monitor \
       --project-directory "$PROJECT_DIR" \
+      "${COMPOSE_FILES[@]}" \
+      "${PROFILE_ARGS[@]}" \
       up -d --build
 
   check_services_health "$CONTEXT_NAME"
 
 done
 
+GPU_SITES=$(IFS=','; echo "${GPU_SITES[*]}")
 generate_prometheus_config
 
 echo "✅ Déploiement terminé"
