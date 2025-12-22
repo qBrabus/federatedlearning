@@ -31,18 +31,47 @@ DEPLOY_LOG_TIMEOUT=${DEPLOY_LOG_TIMEOUT:-60}
 create_context() {
   local name=$1
   local target=$2
-  if ! docker context ls --format '{{.Name}}' | grep -q "^${name}$"; then
-    echo "[deploy] Création du contexte docker ${name} -> ${target}"
-    docker context create "$name" --docker "host=ssh://${target}"
-  else
-    echo "[deploy] Contexte docker ${name} déjà présent"
+  local endpoint="ssh://${target}"
+
+  if docker context ls --format '{{.Name}}' | grep -q "^${name}$"; then
+    local current_endpoint
+    current_endpoint=$(docker context inspect "$name" --format '{{ .Endpoints.docker.Host }}' 2>/dev/null || true)
+
+    if [[ "$current_endpoint" != "$endpoint" ]]; then
+      echo "[deploy] Mise à jour du contexte docker ${name} -> ${target} (ancien endpoint: ${current_endpoint:-inconnu})"
+      if ! docker context update "$name" --docker "host=${endpoint}" >/dev/null 2>&1; then
+        echo "[deploy] Échec de la mise à jour du contexte ${name}, recréation" >&2
+        docker context rm -f "$name" >/dev/null 2>&1 || true
+        docker context create "$name" --docker "host=${endpoint}"
+      fi
+    else
+      echo "[deploy] Contexte docker ${name} déjà présent"
+    fi
+    return
   fi
+
+  echo "[deploy] Création du contexte docker ${name} -> ${target}"
+  docker context create "$name" --docker "host=${endpoint}"
+}
+
+ensure_ssh_access() {
+  local target=$1
+
+  if ssh -o BatchMode=yes -o ConnectTimeout=10 "$target" "echo ok" >/dev/null 2>&1; then
+    return
+  fi
+
+  echo "[deploy] Impossible d'établir la connexion SSH vers ${target}. Vérifiez la configuration SSH (clé, .ssh/config, reachabilité)." >&2
+  exit 1
 }
 
 sync_repo() {
   local target=$1
   echo "[deploy] Synchronisation du dépôt vers ${target}:${REMOTE_PATH}"
-  rsync -avz --delete --exclude '.git/' --exclude 'certs/' --exclude 'data/' "${ROOT_DIR}/" "${target}:${REMOTE_PATH}/"
+  if ! rsync -e "ssh -o BatchMode=yes -o ConnectTimeout=10" -avz --delete --exclude '.git/' --exclude 'certs/' --exclude 'data/' "${ROOT_DIR}/" "${target}:${REMOTE_PATH}/"; then
+    echo "[deploy] La synchronisation rsync vers ${target} a échoué. Vérifiez la connectivité réseau et la configuration SSH." >&2
+    exit 1
+  fi
 }
 
 print_container_logs() {
@@ -165,6 +194,7 @@ print(f"[deploy] Prometheus config updated with all sites: {output_file}")
 PY
 }
 
+ensure_ssh_access "$PROXY_IP"
 create_context proxy-node "$PROXY_IP"
 
 ensure_rsync "$PROXY_IP"
@@ -202,6 +232,7 @@ for SITE_ENTRY in "${SITES[@]}"; do
   echo "[deploy] Déploiement du site : ${SITE_NAME} (${SITE_IP})"
   echo "-------------------------------------------------------"
 
+  ensure_ssh_access "$SITE_IP"
   ensure_rsync "$SITE_IP"
   sync_repo "$SITE_IP"
   create_context "$CONTEXT_NAME" "$SITE_IP"
