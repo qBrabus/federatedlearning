@@ -22,6 +22,11 @@ PROJECT_DIR="$ROOT_DIR"
 CLIENT_SITES=${CLIENT_SITES:-""}
 IFS=',' read -ra SITES <<< "$CLIENT_SITES"
 
+context_accessible() {
+  local context=$1
+  docker --context "$context" info >/dev/null 2>&1
+}
+
 echo "⚠️  ATTENTION : Ce script va supprimer tous les conteneurs, volumes et images liés à ce projet sur le Proxy et les sites clients."
 read -p "Voulez-vous continuer ? (y/N) " -n 1 -r
 echo
@@ -39,7 +44,13 @@ for SITE_ENTRY in "${SITES[@]}"; do
         continue
     fi
 
-    if docker context ls | grep -q "${CONTEXT_NAME}"; then
+    if docker context ls --format '{{.Name}}' | grep -q "^${CONTEXT_NAME}$"; then
+        if ! context_accessible "$CONTEXT_NAME"; then
+            echo "[remove] Contexte ${CONTEXT_NAME} inaccessible ou pointant vers un hôte obsolète : suppression du contexte pour un prochain déploiement propre."
+            docker context rm -f "$CONTEXT_NAME" >/dev/null 2>&1 || true
+            continue
+        fi
+
         echo "[remove] Arrêt et suppression sur ${SITE_NAME} (${CONTEXT_NAME})..."
         docker --context "$CONTEXT_NAME" compose --profile client --profile monitor --project-directory "$PROJECT_DIR" down -v --rmi local --remove-orphans || echo "Échec partiel sur ${SITE_NAME}, continuant..."
     else
