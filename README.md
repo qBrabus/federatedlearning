@@ -157,11 +157,11 @@ Principaux services définis dans `compose.yaml` :
 - **Entrée** : démarré via `client/run.sh` avec `flower-superexec --plugin-type clientapp --appio-api-address supernode:9094`.
 
 ## Ajouter un nouveau site client
-Déclarer un site revient à l'ajouter dans `.env` (format `nom:ip`) puis à relancer `scripts/deploy.sh` ; le script synchronise le dépôt, crée le contexte Docker `ctx-<nom>` et démarre les profils `client` + `monitor` sur ce nœud.
+Déclarer un site revient à l'ajouter dans `.env` (format `nom:ip ou nom de sshconfig`) puis à relancer `scripts/deploy.sh` ; le script synchronise le dépôt, crée le contexte Docker `ctx-<nom>` et démarre les profils `client` + `monitor` sur ce nœud.
 
 Exemple :
 ```env
-CLIENT_SITES="site-lyon:10.200.50.45,site-paris:10.200.50.46,site-lille:10.200.50.60"
+CLIENT_SITES="site-lyon:10.200.50.45,site-paris:ServerCalcul,site-lille:10.200.50.60"
 ```
 Après mise à jour de `.env`, relancer `./scripts/deploy.sh` déploie automatiquement le nouveau site et met à jour la configuration Prometheus.
 
