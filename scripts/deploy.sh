@@ -152,7 +152,7 @@ resolve_remote_path() {
 }
 
 generate_prometheus_config() {
-  CLIENT_SITES="$CLIENT_SITES" GPU_SITES="$GPU_SITES" PROXY_IP="$PROXY_IP" python3 - <<'PY'
+  CLIENT_SITES="$CLIENT_SITES" GPU_SITES="$GPU_SITES" PROXY_IP="$PROXY_IP" PROXY_METRICS_PORT="${PROXY_METRICS_PORT:-8081}" python3 - <<'PY'
 import os
 from pathlib import Path
 
@@ -164,6 +164,7 @@ except ModuleNotFoundError as exc:  # pragma: no cover - runtime safeguard
 sites_env = os.getenv("CLIENT_SITES", "")
 gpu_sites_env = os.getenv("GPU_SITES", "")
 proxy_ip = os.getenv("PROXY_IP", "127.0.0.1")
+proxy_metrics_port = os.getenv("PROXY_METRICS_PORT", "8081")
 
 sites = [entry.split(":", 1) for entry in sites_env.split(",") if ":" in entry]
 gpu_sites = [entry.split(":", 1) for entry in gpu_sites_env.split(",") if ":" in entry]
@@ -173,10 +174,10 @@ config = {
     "scrape_configs": [
         {
             "job_name": "cadvisor-hub",
-            "static_configs": [{"targets": [f"{proxy_ip}:8081"]}],
+            "static_configs": [{"targets": [f"{proxy_ip}:{proxy_metrics_port}"]}],
         },
         {
-            "job_name": "cadvisor-clients",
+            "job_name": "cadvisor-client",
             "static_configs": [{"targets": [f"{ip}:8080" for _, ip in sites]}],
         },
     ],

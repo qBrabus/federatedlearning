@@ -117,8 +117,10 @@ Pour expérimenter sans SSH (tout sur la même machine) :
 ```bash
 docker compose --profile hub --profile client --profile monitor up -d --build
 ```
-- Le fichier `monitoring/prometheus/prometheus.yml` versionné pointe par défaut sur `cadvisor:8080` et `${PROXY_IP}:8081`.
-  Pour surveiller le hub localement, assurez-vous que `PROXY_IP` vaut `127.0.0.1` ou regénérez le fichier via `scripts/deploy.sh`.
+- Le fichier `monitoring/prometheus/prometheus.yml` versionné pointe par défaut sur `cadvisor:8080` et `${PROXY_IP}:${PROXY_METRICS_PORT:-8081}`.
+  - Quand Prometheus tourne sur un autre hôte que le proxy, exposez `fl-cadvisor-hub` en `8081` (mapping `8081:8080`) et laissez la valeur par défaut.
+  - Quand Prometheus partage le même réseau Docker que `fl-cadvisor-hub` (ex. profil `monitor` lancé sur le proxy), définissez `PROXY_METRICS_PORT=8080`.
+  - Régénérez le fichier via `scripts/deploy.sh` après ajustement des variables.
 - Sur une machine équipée d'un GPU et du runtime NVIDIA, ajoutez `-f compose.gpu.yaml --profile monitor-gpu` pour activer les réservations GPU et le service `dcgm-exporter`. Sans GPU, la pile fonctionne automatiquement en CPU.
 - Les conteneurs utilisent les images locales construites (`orchestrator`, `client`). Par défaut, le déploiement tente d'activer le GPU ; s'il est absent, le client reste opérationnel en CPU et le GPU sera pris en compte automatiquement dès qu'il sera disponible.
 
