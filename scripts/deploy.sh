@@ -10,6 +10,8 @@ PROJECT_DIR="$ROOT_DIR"
 HOST_PROJECT_PATH=${HOST_PROJECT_PATH:-$REMOTE_PATH}
 export HOST_PROJECT_PATH
 declare -A SITE_HOST_PATHS
+declare -A CONTEXT_HOST_PATHS
+declare -A CONTEXT_SITE_NAMES
 PROMETHEUS_CONTEXTS=()
 
 if [[ ! -f "$ENV_FILE" ]]; then
@@ -230,7 +232,10 @@ restart_prometheus_services() {
 
   for CTX in "${contexts[@]}"; do
     echo "[deploy] Redémarrage de Prometheus sur ${CTX}"
-    docker --context "$CTX" compose --project-directory "$PROJECT_DIR" up -d prometheus
+    local context_host_path=${CONTEXT_HOST_PATHS[$CTX]:-$HOST_PROJECT_PATH}
+    local context_site_name=${CONTEXT_SITE_NAMES[$CTX]:-}
+    HOST_PROJECT_PATH="$context_host_path" SITE_NAME="$context_site_name" \
+      docker --context "$CTX" compose --project-directory "$PROJECT_DIR" up -d prometheus
     check_services_health "$CTX"
   done
 }
@@ -303,6 +308,8 @@ for SITE_ENTRY in "${SITES[@]}"; do
       up -d --build
 
   PROMETHEUS_CONTEXTS+=("$CONTEXT_NAME")
+  CONTEXT_HOST_PATHS["$CONTEXT_NAME"]="$CURRENT_HOST_PATH"
+  CONTEXT_SITE_NAMES["$CONTEXT_NAME"]="$SITE_NAME"
 
   check_services_health "$CONTEXT_NAME"
 
