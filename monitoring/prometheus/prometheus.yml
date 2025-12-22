@@ -6,7 +6,7 @@ global:
 scrape_configs:
   - job_name: 'cadvisor-hub'
     static_configs:
-      - targets: ['${PROXY_IP:-cadvisor-hub}:${PROXY_METRICS_PORT:-8081}']
+      - targets: ['cadvisor-hub:8081']
 
   - job_name: 'cadvisor-client'
     static_configs:
