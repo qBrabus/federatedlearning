@@ -96,7 +96,7 @@ services:
     labels:
       - "fl-site=${SITE_NAME:-unknown}"
     volumes:
-      - ${HOST_PROJECT_PATH:-.}/monitoring/prometheus:/etc/prometheus:ro
+      - ${HOST_PROJECT_PATH:-.}/monitoring/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
     ports:
       - "${PROMETHEUS_PORT:-9090}:9090"
 

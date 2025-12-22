@@ -9,6 +9,8 @@ PROJECT_DIR="$ROOT_DIR"
 # Utilisé pour les montages sur les hôtes distants (chemins doivent exister sur le nœud Docker).
 HOST_PROJECT_PATH=${HOST_PROJECT_PATH:-$REMOTE_PATH}
 export HOST_PROJECT_PATH
+declare -A SITE_HOST_PATHS
+PROMETHEUS_CONTEXTS=()
 
 if [[ ! -f "$ENV_FILE" ]]; then
   echo "[deploy] Fichier .env introuvable. Copiez .env.example puis personnalisez-le." >&2
@@ -67,8 +69,9 @@ ensure_ssh_access() {
 
 sync_repo() {
   local target=$1
-  echo "[deploy] Synchronisation du dépôt vers ${target}:${REMOTE_PATH}"
-  if ! rsync -e "ssh -o BatchMode=yes -o ConnectTimeout=10" --rsync-path="bash -c 'rsync \"\$@\"' --" -avz --delete --exclude '.git/' --exclude 'certs/' --exclude 'data/' "${ROOT_DIR}/" "${target}:${REMOTE_PATH}/"; then
+  local destination=${2:-$REMOTE_PATH}
+  echo "[deploy] Synchronisation du dépôt vers ${target}:${destination}"
+  if ! rsync -e "ssh -o BatchMode=yes -o ConnectTimeout=10" --rsync-path="bash -c 'rsync \"\$@\"' --" -avz --delete --exclude '.git/' --exclude 'certs/' --exclude 'data/' "${ROOT_DIR}/" "${target}:${destination}/"; then
     echo "[deploy] La synchronisation rsync vers ${target} a échoué. Vérifiez la connectivité réseau et la configuration SSH." >&2
     exit 1
   fi
@@ -194,14 +197,53 @@ print(f"[deploy] Prometheus config updated with all sites: {output_file}")
 PY
 }
 
+distribute_prometheus_config() {
+  local config_path="${ROOT_DIR}/monitoring/prometheus/prometheus.yml"
+  local targets=()
+
+  targets+=("$PROXY_IP")
+
+  for SITE_ENTRY in "${SITES[@]}"; do
+    local SITE_IP=${SITE_ENTRY#*:}
+    targets+=("$SITE_IP")
+  done
+
+  for TARGET in "${targets[@]}"; do
+    local remote_path
+    if [[ "$TARGET" == "$PROXY_IP" ]]; then
+      remote_path="$PROXY_HOST_PATH"
+    else
+      remote_path="${SITE_HOST_PATHS[$TARGET]:-$REMOTE_PATH}"
+    fi
+
+    echo "[deploy] Distribution du fichier Prometheus vers ${TARGET}:${remote_path}"
+    ssh -o BatchMode=yes "$TARGET" "mkdir -p ${remote_path}/monitoring/prometheus"
+    rsync -e "ssh -o BatchMode=yes -o ConnectTimeout=10" --rsync-path="bash -c 'rsync \"\$@\"' --" -avz "$config_path" "${TARGET}:${remote_path}/monitoring/prometheus/prometheus.yml"
+  done
+}
+
+restart_prometheus_services() {
+  local contexts=("$@")
+  if [[ ${#contexts[@]} -eq 0 ]]; then
+    return
+  fi
+
+  for CTX in "${contexts[@]}"; do
+    echo "[deploy] Redémarrage de Prometheus sur ${CTX}"
+    docker --context "$CTX" compose --project-directory "$PROJECT_DIR" up -d prometheus
+    check_services_health "$CTX"
+  done
+}
+
 ensure_ssh_access "$PROXY_IP"
 create_context proxy-node "$PROXY_IP"
 
 ensure_rsync "$PROXY_IP"
-sync_repo "$PROXY_IP"
+PROXY_HOST_PATH=$(resolve_remote_path "$PROXY_IP" "$REMOTE_PATH")
+sync_repo "$PROXY_IP" "$PROXY_HOST_PATH"
 
 echo "[deploy] Démarrage du hub sur le proxy (${PROXY_IP})"
-docker --context proxy-node compose --profile hub --project-directory "$PROJECT_DIR" up -d --build
+HOST_PROJECT_PATH="$PROXY_HOST_PATH" docker --context proxy-node compose --profile hub --project-directory "$PROJECT_DIR" up -d --build
 check_services_health proxy-node
 
 IFS=',' read -ra SITES <<< "$CLIENT_SITES"
@@ -235,7 +277,8 @@ for SITE_ENTRY in "${SITES[@]}"; do
   ensure_ssh_access "$SITE_IP"
   ensure_rsync "$SITE_IP"
   CURRENT_HOST_PATH=$(resolve_remote_path "$SITE_IP" "$REMOTE_PATH")
-  sync_repo "$SITE_IP"
+  SITE_HOST_PATHS["$SITE_IP"]="$CURRENT_HOST_PATH"
+  sync_repo "$SITE_IP" "$CURRENT_HOST_PATH"
   create_context "$CONTEXT_NAME" "$SITE_IP"
 
   GPU_PRESENT=$(detect_remote_gpu "$SITE_IP")
@@ -259,12 +302,16 @@ for SITE_ENTRY in "${SITES[@]}"; do
       "${PROFILE_ARGS[@]}" \
       up -d --build
 
+  PROMETHEUS_CONTEXTS+=("$CONTEXT_NAME")
+
   check_services_health "$CONTEXT_NAME"
 
 done
 
 GPU_SITES=$(IFS=','; echo "${GPU_SITES[*]}")
 generate_prometheus_config
+distribute_prometheus_config
+restart_prometheus_services "${PROMETHEUS_CONTEXTS[@]}"
 
 echo "✅ Déploiement terminé"
 echo "🔗 Hub Fleet API: http://${PROXY_IP}:${HUB_PORT}"
