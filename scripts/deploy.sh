@@ -68,7 +68,7 @@ ensure_ssh_access() {
 sync_repo() {
   local target=$1
   echo "[deploy] Synchronisation du dépôt vers ${target}:${REMOTE_PATH}"
-  if ! rsync -e "ssh -o BatchMode=yes -o ConnectTimeout=10" -avz --delete --exclude '.git/' --exclude 'certs/' --exclude 'data/' "${ROOT_DIR}/" "${target}:${REMOTE_PATH}/"; then
+  if ! rsync -e "ssh -o BatchMode=yes -o ConnectTimeout=10" --rsync-path="bash -c 'rsync \"\$@\"' --" -avz --delete --exclude '.git/' --exclude 'certs/' --exclude 'data/' "${ROOT_DIR}/" "${target}:${REMOTE_PATH}/"; then
     echo "[deploy] La synchronisation rsync vers ${target} a échoué. Vérifiez la connectivité réseau et la configuration SSH." >&2
     exit 1
   fi
