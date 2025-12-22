@@ -234,10 +234,10 @@ for SITE_ENTRY in "${SITES[@]}"; do
 
   ensure_ssh_access "$SITE_IP"
   ensure_rsync "$SITE_IP"
+  CURRENT_HOST_PATH=$(resolve_remote_path "$SITE_IP" "$REMOTE_PATH")
   sync_repo "$SITE_IP"
   create_context "$CONTEXT_NAME" "$SITE_IP"
 
-  CURRENT_HOST_PATH=$(resolve_remote_path "$SITE_IP" "$REMOTE_PATH")
   GPU_PRESENT=$(detect_remote_gpu "$SITE_IP")
 
   COMPOSE_FILES=(-f "$PROJECT_DIR/compose.yaml")
