@@ -28,13 +28,11 @@ flowchart LR
       CLI[docker + ssh + rsync]
       Scripts[scripts/deploy.sh<br/>scripts/generate_certs.sh]
     end
-
     subgraph Proxy/Hub
       Superlink[(SuperLink 8080/9091/9093)]
-      ServerApp[serverapp (FedAvg)]
+      ServerApp[serverapp - FedAvg]
       CAdvisorHub[cadvisor-hub]
     end
-
     subgraph Site Client 1
       Supernode1[(SuperNode 9094)]
       ClientApp1[clientapp PyTorch]
@@ -43,19 +41,16 @@ flowchart LR
       Prom1[prometheus]
       Graf1[grafana]
     end
-
     subgraph Site Client N
       SupernodeN[(SuperNode 9094)]
       ClientAppN[clientapp PyTorch]
       CAdvisorN[cadvisor]
       DCGMN[dcgm-exporter]
     end
-
     CLI -- SSH + rsync --> Superlink
     CLI -- SSH + rsync --> Supernode1
     CLI -- SSH + rsync --> SupernodeN
     Scripts --> CLI
-
     ServerApp --> Superlink
     ClientApp1 --> Supernode1
     ClientAppN --> SupernodeN
