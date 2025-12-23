@@ -21,17 +21,56 @@ la synchronisation du dépôt, la génération des certificats TLS et le démarr
 - [FAQ rapide](#faq-rapide)
 
 ## Architecture et composants
+
+```mermaid
+flowchart LR
+    subgraph Admin[Poste d'administration]
+      CLI[docker + ssh + rsync]
+      Scripts[scripts/deploy.sh<br/>scripts/generate_certs.sh]
+    end
+
+    subgraph Proxy/Hub
+      Superlink[(SuperLink 8080/9091/9093)]
+      ServerApp[serverapp (FedAvg)]
+      CAdvisorHub[cadvisor-hub]
+    end
+
+    subgraph Site Client 1
+      Supernode1[(SuperNode 9094)]
+      ClientApp1[clientapp PyTorch]
+      CAdvisor1[cadvisor]
+      DCGM1[dcgm-exporter]
+      Prom1[prometheus]
+      Graf1[grafana]
+    end
+
+    subgraph Site Client N
+      SupernodeN[(SuperNode 9094)]
+      ClientAppN[clientapp PyTorch]
+      CAdvisorN[cadvisor]
+      DCGMN[dcgm-exporter]
+    end
+
+    CLI -- SSH + rsync --> Superlink
+    CLI -- SSH + rsync --> Supernode1
+    CLI -- SSH + rsync --> SupernodeN
+    Scripts --> CLI
+
+    ServerApp --> Superlink
+    ClientApp1 --> Supernode1
+    ClientAppN --> SupernodeN
+    Supernode1 -- Flower gRPC --> Superlink
+    SupernodeN -- Flower gRPC --> Superlink
+    Prom1 --> CAdvisor1
+    Prom1 --> DCGM1
+    Prom1 --> CAdvisorHub
+    Graf1 --> Prom1
 ```
-- Docker CLI + contexts           - superlink (Fleet API 8080)        - supernode (connecté au hub)
-- scripts/deploy.sh               - serverapp (FedAvg)                - clientapp (PyTorch + Flower client)
-- scripts/generate_certs.sh       - cadvisor-hub (metrics)            - dcgm-exporter (metrics GPU si dispo)
-                                  - ports hub : 8080/9091/9093        - cadvisor (metrics conteneurs)
-                                                                      - prometheus + grafana
-                                                                        (1 stack monitoring par site)
-```
+
 - **Profiles Compose** : `hub` (proxy), `client` (sites), `monitor` (par site) et `monitor-gpu` (ajouté automatiquement quand un GPU est détecté). Ils peuvent être lancés ensemble ou séparément.
-- **Réseau** : chaque SuperNode se connecte au SuperLink via `${PROXY_IP}:${HUB_PORT}` ; les AppIo internes utilisent les ports
-  9091 (hub) et 9094 (client) exposés uniquement sur le réseau docker.
+- **Réseau** : chaque SuperNode se connecte au SuperLink via `${PROXY_IP}:${HUB_PORT}` ; les AppIo internes utilisent les ports 9091 (hub) et 9094 (client) exposés uniquement sur le réseau docker.
+- **Sécurité** : certificats TLS générés localement (`scripts/generate_certs.sh`) puis montés côté SuperLink/SuperNode si besoin d'activer le mode sécurisé (désactivé par défaut avec `--insecure`).
+- **Monitoring** : une pile Prometheus/Grafana par site client (profil `monitor`), reliée à `cadvisor-hub` via le port 8081 et à chaque `cadvisor`/`dcgm-exporter` local.
 
 ## Arborescence du dépôt
 ```
@@ -57,6 +96,11 @@ la synchronisation du dépôt, la génération des certificats TLS et le démarr
     └── grafana-provisioning/      # Datasource + dashboard « Flower Federated Overview »
 ```
 
+### Points clés supplémentaires
+- `compose.gpu.yaml` ajoute automatiquement les réservations NVIDIA et le service `dcgm-exporter` pour exposer les métriques GPU.
+- Les dossiers `certs/` (certificats TLS) et `data/` (jeux de données locaux éventuels) ne sont pas versionnés : ils doivent être créés au moment du déploiement.
+- Les scripts `run.sh` de `client/` et `orchestrator/` encapsulent l'appel à `flower-superexec` avec l'adresse AppIo adaptée.
+
 ## Prérequis
 - Poste d'**administration Ubuntu** avec Docker et le plugin Docker Compose.
 - Accès **SSH sans mot de passe** vers :
@@ -66,6 +110,18 @@ la synchronisation du dépôt, la génération des certificats TLS et le démarr
 - Fichier `~/.ssh/config` configuré pour le proxy et les sites (utilisateur, clé, etc.).
 - Python 3 + module PyYAML installés sur le poste d'admin (utilisés par `scripts/deploy.sh`).
 - (Optionnel) Accès sudo sur les hôtes pour installer `rsync` si absent.
+
+### Variables d'environnement principales (`.env`)
+| Variable | Rôle | Exemple |
+| --- | --- | --- |
+| `PROXY_IP` | Alias SSH ou IP publique du proxy/hub | `proxy-host` |
+| `HUB_INTERNAL_IP` / `HUB_PUBLIC_IP` | Adresses internes/publiques utilisées par les clients (site1 utilise l'interne) | `10.0.0.10` / `198.51.100.10` |
+| `CLIENT_SITES` | Liste `nom:ip` ou `nom:alias ssh` des sites | `site1:10.0.0.21,site2:gpu-remote` |
+| `FLWR_VERSION` | Version Flower utilisée par les images SuperLink/SuperNode | `1.25.0` |
+| `NUM_ROUNDS` | Nombre de rounds serveur par défaut | `5` |
+| `BATCH_SIZE`, `LEARNING_RATE`, `N_LOCAL_EPOCHS` | Hyperparamètres clients (surchargés par `run_config` si fourni) | `64`, `0.01`, `1` |
+| `GRAFANA_PORT`, `PROMETHEUS_PORT` | Ports exposés pour la stack monitoring | `3000`, `9090` |
+| `HOST_PROJECT_PATH` | Chemin du dépôt côté hôte (utile quand le bind mount diffère) | `/home/user/federatedlearning` |
 
 ## Configuration
 1. Copiez le modèle :
@@ -108,6 +164,8 @@ Le script :
 - génère un `monitoring/prometheus/prometheus.yml` qui référence automatiquement chaque site ;
 - affiche les URLs utiles (Hub + premier site pour Grafana/Prometheus) en fin de déploiement.
 
+> Astuce : définir `DEPLOY_LOG_FOLLOW=true` avant d'exécuter le script permet de suivre les journaux `docker compose` en direct et d'identifier rapidement les services `unhealthy`.
+
 4) Points d'accès après déploiement :
 - Fleet API hub : `http://${PROXY_IP}:${HUB_PORT}`
 - Grafana / Prometheus : `http://<IP_site_client>:{${GRAFANA_PORT}|${PROMETHEUS_PORT}}` (par défaut le premier site de la liste)
@@ -123,6 +181,13 @@ docker compose --profile hub --profile client --profile monitor up -d --build
   - Régénérez le fichier via `scripts/deploy.sh` après ajustement des variables.
 - Sur une machine équipée d'un GPU et du runtime NVIDIA, ajoutez `-f compose.gpu.yaml --profile monitor-gpu` pour activer les réservations GPU et le service `dcgm-exporter`. Sans GPU, la pile fonctionne automatiquement en CPU.
 - Les conteneurs utilisent les images locales construites (`orchestrator`, `client`). Par défaut, le déploiement tente d'activer le GPU ; s'il est absent, le client reste opérationnel en CPU et le GPU sera pris en compte automatiquement dès qu'il sera disponible.
+
+### Démarrage minimal (hub seul)
+Pour tester uniquement le SuperLink + ServerApp sans clients :
+```bash
+docker compose --profile hub up -d --build
+```
+Puis connecter des clients distants ou lancer une stack client séparée avec `--profile client` en pointant `HUB_ADDRESS` sur l'adresse du hub.
 
 Arrêt local :
 ```bash
@@ -157,6 +222,7 @@ Principaux services définis dans `compose.yaml` :
   - `learning-rate` / env `LEARNING_RATE` (défaut 0.01)
 - **Device** : sélection automatique `cuda` si disponible, sinon CPU (le basculement est journalisé et automatique).
 - **Entrée** : démarré via `client/run.sh` avec `flower-superexec --plugin-type clientapp --appio-api-address supernode:9094`.
+- **Images** : basées sur `pytorch/pytorch:2.4.1-cuda12.4-cudnn9-runtime` (GPU) ou la variante CPU si aucun GPU n'est présent.
 
 ## Ajouter un nouveau site client
 Déclarer un site revient à l'ajouter dans `.env` (format `nom:ip ou nom de sshconfig`) puis à relancer `scripts/deploy.sh` ; le script synchronise le dépôt, crée le contexte Docker `ctx-<nom>` et démarre les profils `client` + `monitor` sur ce nœud.
@@ -217,3 +283,5 @@ Le dépôt s'appuie sur des données synthétiques pour la démonstration. Pour 
 - **Comment ajuster le modèle ?** Modifier `client/app/client.py` (classe `SimpleNet` ou la génération de données) puis reconstruire `clientapp`.
 - **GPU non disponible ?** Le déploiement détecte l'absence de GPU sur chaque site et démarre `clientapp` en mode CPU sans blocage. Dès qu'un GPU est ajouté, relancer `scripts/deploy.sh` activera automatiquement les réservations GPU et le service `dcgm-exporter` via `compose.gpu.yaml`.
 - **Quelles versions sont utilisées ?** Flower `1.25.0`, PyTorch `2.4.1-cuda12.4-cudnn9-runtime` côté client.
+- **Comment activer les certificats TLS ?** Générer les certificats via `scripts/generate_certs.sh` puis monter `certs/` dans les services Flower en retirant l'option `--insecure` dans `compose.yaml`/`run.sh`.
+- **Comment personnaliser la pile monitoring ?** Adapter les dashboards dans `monitoring/grafana-provisioning` ou éditer `monitoring/prometheus/prometheus.yml` (re-généré par `deploy.sh` à partir de `.env`), puis redémarrer Prometheus pour prendre en compte les changements.
