@@ -23,43 +23,65 @@ la synchronisation du dépôt, la génération des certificats TLS et le démarr
 ## Architecture et composants
 
 ```mermaid
-flowchart LR
-    subgraph Admin[Poste d'administration]
-      CLI[docker + ssh + rsync]
-      Scripts[scripts/deploy.sh<br/>scripts/generate_certs.sh]
+flowchart TB
+    subgraph Admin["🖥️ Poste d'Administration Ubuntu"]
+        CLI["Docker + SSH + rsync<br/>Docker Contexts"]
+        DeployScript["scripts/deploy.sh"]
+        CertScript["scripts/generate_certs.sh"]
+        RemoveScript["scripts/remove.sh"]
+        EnvFile[".env<br/>Configuration"]
     end
-    subgraph Proxy/Hub
-      Superlink[(SuperLink 8080/9091/9093)]
-      ServerApp[serverapp - FedAvg]
-      CAdvisorHub[cadvisor-hub]
+
+    subgraph ProxyHub["🌐 Proxy/Hub (proxy-node)"]
+        SuperLink["SuperLink<br/>flwr/superlink:1.25.0<br/>:8080 Fleet API<br/>:9091 ServerAppIo<br/>:9093 Control"]
+        ServerApp["ServerApp<br/>FedAvg Strategy<br/>NUM_ROUNDS rounds"]
+        CAdvisorHub["cadvisor-hub<br/>:8081"]
     end
-    subgraph Site Client 1
-      Supernode1[(SuperNode 9094)]
-      ClientApp1[clientapp PyTorch]
-      CAdvisor1[cadvisor]
-      DCGM1[dcgm-exporter]
-      Prom1[prometheus]
-      Graf1[grafana]
+
+    subgraph Site1["🔧 Site Client 1 (ctx-site1)"]
+        SuperNode1["SuperNode<br/>flwr/supernode:1.25.0<br/>:9094 ClientAppIo"]
+        ClientApp1["ClientApp<br/>PyTorch 2.4.1-CUDA12.4<br/>SimpleNet + synthetic data<br/>CPU/GPU auto-detect"]
+        CAdvisor1["cadvisor<br/>:8080"]
+        DCGM1["dcgm-exporter<br/>:9400<br/>(si GPU détecté)"]
+        Prom1["Prometheus<br/>:9090"]
+        Graf1["Grafana<br/>:3000<br/>Dashboard: Flower Federated"]
     end
-    subgraph Site Client N
-      SupernodeN[(SuperNode 9094)]
-      ClientAppN[clientapp PyTorch]
-      CAdvisorN[cadvisor]
-      DCGMN[dcgm-exporter]
+
+    subgraph SiteN["🔧 Site Client N (ctx-siteN)"]
+        SuperNodeN["SuperNode<br/>:9094"]
+        ClientAppN["ClientApp<br/>PyTorch"]
+        CAdvisorN["cadvisor"]
+        DCGMN["dcgm-exporter<br/>(optionnel)"]
     end
-    CLI -- SSH + rsync --> Superlink
-    CLI -- SSH + rsync --> Supernode1
-    CLI -- SSH + rsync --> SupernodeN
-    Scripts --> CLI
-    ServerApp --> Superlink
-    ClientApp1 --> Supernode1
-    ClientAppN --> SupernodeN
-    Supernode1 -- Flower gRPC --> Superlink
-    SupernodeN -- Flower gRPC --> Superlink
-    Prom1 --> CAdvisor1
-    Prom1 --> DCGM1
-    Prom1 --> CAdvisorHub
-    Graf1 --> Prom1
+
+    EnvFile -.-> DeployScript
+    CertScript --> CLI
+    RemoveScript --> CLI
+    DeployScript --> CLI
+    
+    CLI -- "SSH + rsync<br/>deploy code" --> ProxyHub
+    CLI -- "SSH + rsync<br/>deploy code" --> Site1
+    CLI -- "SSH + rsync<br/>deploy code" --> SiteN
+    
+    ServerApp -- "flower-superexec<br/>superlink:9091" --> SuperLink
+    ClientApp1 -- "flower-superexec<br/>supernode:9094" --> SuperNode1
+    ClientAppN -- "flower-superexec" --> SuperNodeN
+    
+    SuperNode1 -- "Flower gRPC<br/>${PROXY_IP}:${HUB_PORT}" --> SuperLink
+    SuperNodeN -- "Flower gRPC" --> SuperLink
+    
+    Prom1 -- "scrape :8080" --> CAdvisor1
+    Prom1 -- "scrape :9400" --> DCGM1
+    Prom1 -- "scrape :8081" --> CAdvisorHub
+    Graf1 -- "datasource" --> Prom1
+
+    style Admin fill:#e1f5ff
+    style ProxyHub fill:#fff4e1
+    style Site1 fill:#e8f5e9
+    style SiteN fill:#f3e5f5
+    style SuperLink fill:#ffeb3b
+    style SuperNode1 fill:#ffeb3b
+    style SuperNodeN fill:#ffeb3b
 ```
 
 - **Profiles Compose** : `hub` (proxy), `client` (sites), `monitor` (par site) et `monitor-gpu` (ajouté automatiquement quand un GPU est détecté). Ils peuvent être lancés ensemble ou séparément.
