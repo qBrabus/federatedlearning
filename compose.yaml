@@ -38,9 +38,8 @@ services:
     container_name: fl-supernode
     labels:
       - "fl-site=${SITE_NAME:-unknown}"
-    # CORRECTION : Suppression du nom du binaire et correction du flag API
     command:
-      ["--superlink", "${PROXY_IP}:${HUB_PORT}", "--clientappio-api-address", "0.0.0.0:9094", "--insecure"]
+      ["--superlink", "${HUB_ADDRESS}:${HUB_PORT}", "--clientappio-api-address", "0.0.0.0:9094", "--insecure"]
 
   clientapp:
     build: ./client
@@ -95,8 +94,6 @@ services:
     container_name: fl-prometheus
     labels:
       - "fl-site=${SITE_NAME:-unknown}"
-    environment:
-      - PROXY_IP=${PROXY_IP:-cadvisor-hub}
     volumes:
       - ${HOST_PROJECT_PATH:-.}/monitoring/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
     ports:

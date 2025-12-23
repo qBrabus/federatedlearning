@@ -1,6 +1,5 @@
 .env
 certs/
-data/
 __pycache__/
 *.pyc
 monitoring/prometheus.generated.yml
