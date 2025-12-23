@@ -24,64 +24,90 @@ la synchronisation du dépôt, la génération des certificats TLS et le démarr
 
 ```mermaid
 flowchart TB
-    subgraph Admin["🖥️ Poste d'Administration Ubuntu"]
-        CLI["Docker + SSH + rsync<br/>Docker Contexts"]
-        DeployScript["scripts/deploy.sh"]
-        CertScript["scripts/generate_certs.sh"]
-        RemoveScript["scripts/remove.sh"]
-        EnvFile[".env<br/>Configuration"]
+    subgraph Admin["━━━ 🖥️ POSTE ADMINISTRATION ━━━"]
+        direction TB
+        EnvFile[".env<br/><i>Configuration globale</i>"]
+        
+        subgraph Scripts["📜 Scripts de déploiement"]
+            DeployScript["deploy.sh<br/><i>Déploiement automatisé</i>"]
+            CertScript["generate_certs.sh<br/><i>Génération TLS</i>"]
+            RemoveScript["remove.sh<br/><i>Nettoyage</i>"]
+        end
+        
+        CLI["🔧 Outils système<br/>Docker + SSH + rsync<br/>Docker Contexts"]
     end
 
-    subgraph ProxyHub["🌐 Proxy/Hub (proxy-node)"]
-        SuperLink["SuperLink<br/>flwr/superlink:1.25.0<br/>:8080 Fleet API<br/>:9091 ServerAppIo<br/>:9093 Control"]
-        ServerApp["ServerApp<br/>FedAvg Strategy<br/>NUM_ROUNDS rounds"]
-        CAdvisorHub["cadvisor-hub<br/>:8081"]
+    subgraph ProxyHub["━━━ 🌐 PROXY/HUB proxy-node ━━━"]
+        direction TB
+        SuperLink["🔗 SuperLink<br/>flwr/superlink:1.25.0<br/>━━━━━━━━━━<br/>:8080 Fleet API<br/>:9091 ServerAppIo<br/>:9093 Control"]
+        ServerApp["⚙️ ServerApp<br/>Stratégie: FedAvg<br/>Rounds: NUM_ROUNDS"]
+        CAdvisorHub["📊 cadvisor-hub<br/>:8081<br/><i>Métriques conteneurs</i>"]
     end
 
-    subgraph Site1["🔧 Site Client 1 (ctx-site1)"]
-        SuperNode1["SuperNode<br/>flwr/supernode:1.25.0<br/>:9094 ClientAppIo"]
-        ClientApp1["ClientApp<br/>PyTorch 2.4.1-CUDA12.4<br/>SimpleNet + synthetic data<br/>CPU/GPU auto-detect"]
-        CAdvisor1["cadvisor<br/>:8080"]
-        DCGM1["dcgm-exporter<br/>:9400<br/>(si GPU détecté)"]
-        Prom1["Prometheus<br/>:9090"]
-        Graf1["Grafana<br/>:3000<br/>Dashboard: Flower Federated"]
+    subgraph Site1["━━━ 🏢 SITE CLIENT 1 ctx-site1 ━━━"]
+        direction TB
+        SuperNode1["🔗 SuperNode<br/>flwr/supernode:1.25.0<br/>:9094 ClientAppIo"]
+        ClientApp1["🤖 ClientApp<br/>PyTorch 2.4.1-CUDA12.4<br/>SimpleNet + données synthétiques<br/>Auto-detect CPU/GPU"]
+        
+        subgraph Monitor1["📈 Monitoring"]
+            CAdvisor1["cadvisor :8080"]
+            DCGM1["dcgm-exporter :9400<br/><i>si GPU disponible</i>"]
+            Prom1["Prometheus :9090"]
+            Graf1["Grafana :3000<br/>Dashboard: Flower Federated"]
+        end
     end
 
-    subgraph SiteN["🔧 Site Client N (ctx-siteN)"]
-        SuperNodeN["SuperNode<br/>:9094"]
-        ClientAppN["ClientApp<br/>PyTorch"]
-        CAdvisorN["cadvisor"]
-        DCGMN["dcgm-exporter<br/>(optionnel)"]
+    subgraph SiteN["━━━ 🏢 SITE CLIENT N ctx-siteN ━━━"]
+        direction TB
+        SuperNodeN["🔗 SuperNode<br/>:9094"]
+        ClientAppN["🤖 ClientApp<br/>PyTorch"]
+        
+        subgraph MonitorN["📈 Monitoring"]
+            CAdvisorN["cadvisor"]
+            DCGMN["dcgm-exporter<br/><i>optionnel</i>"]
+        end
     end
 
-    EnvFile -.-> DeployScript
-    CertScript --> CLI
-    RemoveScript --> CLI
-    DeployScript --> CLI
+    %% Connexions Admin
+    EnvFile ==> DeployScript
+    DeployScript ==> CLI
+    CertScript -.-> CLI
+    RemoveScript -.-> CLI
     
-    CLI -- "SSH + rsync<br/>deploy code" --> ProxyHub
-    CLI -- "SSH + rsync<br/>deploy code" --> Site1
-    CLI -- "SSH + rsync<br/>deploy code" --> SiteN
+    %% Déploiement SSH
+    CLI == "SSH + rsync" ==> ProxyHub
+    CLI == "SSH + rsync" ==> Site1
+    CLI == "SSH + rsync" ==> SiteN
     
-    ServerApp -- "flower-superexec<br/>superlink:9091" --> SuperLink
-    ClientApp1 -- "flower-superexec<br/>supernode:9094" --> SuperNode1
-    ClientAppN -- "flower-superexec" --> SuperNodeN
+    %% Connexions Flower Hub
+    ServerApp == "flower-superexec<br/>superlink:9091" ==> SuperLink
     
-    SuperNode1 -- "Flower gRPC<br/>${PROXY_IP}:${HUB_PORT}" --> SuperLink
-    SuperNodeN -- "Flower gRPC" --> SuperLink
+    %% Connexions Flower Clients
+    ClientApp1 == "flower-superexec<br/>supernode:9094" ==> SuperNode1
+    ClientAppN == "flower-superexec<br/>supernode:9094" ==> SuperNodeN
     
-    Prom1 -- "scrape :8080" --> CAdvisor1
-    Prom1 -- "scrape :9400" --> DCGM1
-    Prom1 -- "scrape :8081" --> CAdvisorHub
-    Graf1 -- "datasource" --> Prom1
+    %% Communications fédérées
+    SuperNode1 == "Flower gRPC<br/>${PROXY_IP}:${HUB_PORT}" ==> SuperLink
+    SuperNodeN == "Flower gRPC<br/>${PROXY_IP}:${HUB_PORT}" ==> SuperLink
+    
+    %% Monitoring Site 1
+    Prom1 --> CAdvisor1
+    Prom1 --> DCGM1
+    Prom1 --> CAdvisorHub
+    Graf1 --> Prom1
 
-    style Admin fill:#e1f5ff
-    style ProxyHub fill:#fff4e1
-    style Site1 fill:#e8f5e9
-    style SiteN fill:#f3e5f5
-    style SuperLink fill:#ffeb3b
-    style SuperNode1 fill:#ffeb3b
-    style SuperNodeN fill:#ffeb3b
+    %% Styles
+    classDef adminStyle fill:#2d3561,stroke:#4a90e2,stroke-width:3px,color:#fff
+    classDef hubStyle fill:#1f4068,stroke:#e43f5a,stroke-width:3px,color:#fff
+    classDef clientStyle fill:#1b4332,stroke:#52b788,stroke-width:3px,color:#fff
+    classDef monitorStyle fill:#432818,stroke:#fb8500,stroke-width:2px,color:#fff
+    classDef criticalStyle fill:#6a040f,stroke:#e85d04,stroke-width:4px,color:#fff
+    
+    class Admin adminStyle
+    class ProxyHub hubStyle
+    class Site1,SiteN clientStyle
+    class Monitor1,MonitorN monitorStyle
+    class SuperLink,SuperNode1,SuperNodeN criticalStyle
 ```
 
 - **Profiles Compose** : `hub` (proxy), `client` (sites), `monitor` (par site) et `monitor-gpu` (ajouté automatiquement quand un GPU est détecté). Ils peuvent être lancés ensemble ou séparément.
