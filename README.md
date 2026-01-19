@@ -267,6 +267,142 @@ Principaux services définis dans `compose.yaml` :
 - **Entrée** : démarré via `client/run.sh` avec `flower-superexec --plugin-type clientapp --appio-api-address supernode:9094`.
 - **Images** : basées sur `pytorch/pytorch:2.4.1-cuda12.4-cudnn9-runtime` (GPU) ou la variante CPU si aucun GPU n'est présent.
 
+**Vérification de la connectivité :**
+Sur le Proxy, vérifier que les clients sont bien enregistrés :
+```bash
+docker exec -it fl-serverapp flwr supernode list --link-url http://superlink:9093
+```
+
+## 5. Guide d'Exécution de l'Entraînement (Le "Run")
+
+L'entraînement ne démarre pas automatiquement au lancement des conteneurs. Il doit être déclenché manuellement.
+
+### Étape 1 : Préparer les fichiers sur le Proxy
+Les fichiers `pyproject.toml` et `app/client.py` doivent être injectés dans le conteneur `fl-serverapp`.
+
+### Étape 2 : Lancer le Run
+Exécuter la commande suivante sur le **Proxy** :
+```bash
+docker exec -u flower -w /app fl-serverapp flwr run . local
+```
+*Note : `local` est l'alias défini dans le fichier `pyproject.toml` pour désigner la fédération pilotée par le SuperLink local.*
+
+### Étape 3 : Suivre la progression
+*   **Logs Serveur (Proxy) :** `docker logs -f fl-serverapp` (pour voir les rounds FedAvg).
+*   **Logs Client (DGX) :** `docker logs -f fl-clientapp` (pour voir l'utilisation CUDA).
+*   **Activité GPU (DGX) :** `nvidia-smi -l 1`.
+
+## 6. Fichiers de Configuration Cruciaux
+
+Pour que le système fonctionne, deux fichiers doivent être présents dans le répertoire `/app` du conteneur `fl-serverapp`.
+
+### A. Le `pyproject.toml` (Configuration de l'App)
+Ce fichier est obligatoire. **Point critique :** La section `dependencies` doit être vide pour forcer l'utilisation de PyTorch déjà présent dans l'image Docker, évitant ainsi des erreurs de réinstallation.
+
+```toml
+[project]
+name = "flower-federated"
+version = "1.0.5" # Incrémenter pour forcer la mise à jour des clients
+description = "Apprentissage Fédéré DGX"
+
+[tool.flwr.app]
+publisher = "flwr"
+
+[tool.flwr.app.components]
+serverapp = "app.server:app"
+clientapp = "app.client:app"
+
+[tool.flwr.federations.local]
+address = "superlink:9093"
+insecure = true
+```
+
+### B. Le `app/client.py` (Code d'entraînement)
+Ce code définit le modèle (ex: `SimpleNet`) et la logique `NumPyClient`. Il est automatiquement distribué du Proxy vers le Canada et le DGX lors du `flwr run`.
+```
+import torch
+from torch import nn, optim
+from torch.utils.data import DataLoader, TensorDataset
+from flwr.client import ClientApp, NumPyClient
+
+# Définition du modèle SimpleNet (identique sur tous les nœuds)
+class SimpleNet(nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.layer = nn.Sequential(
+            nn.Flatten(), 
+            nn.Linear(784, 128), 
+            nn.ReLU(), 
+            nn.Linear(128, 10)
+        )
+    def forward(self, x): 
+        return self.layer(x)
+
+# Classe FlowerClient qui gère l'entraînement local
+class FlowerClient(NumPyClient):
+    def __init__(self, model, trainloader, device):
+        self.model = model.to(device)
+        self.trainloader = trainloader
+        self.device = device
+
+    def get_parameters(self, config):
+        return [val.cpu().numpy() for val in self.model.state_dict().values()]
+
+    def set_parameters(self, parameters):
+        sd = self.model.state_dict()
+        for k, v in zip(sd.keys(), parameters): 
+            sd[k] = torch.tensor(v)
+        self.model.load_state_dict(sd)
+
+    def fit(self, parameters, config):
+        self.set_parameters(parameters)
+        self.model.train()
+        opt = optim.SGD(self.model.parameters(), lr=0.01)
+        # Entraînement sur une époque
+        for _ in range(1):
+            for bx, by in self.trainloader:
+                bx, by = bx.to(self.device), by.to(self.device)
+                opt.zero_grad()
+                loss = nn.CrossEntropyLoss()(self.model(bx), by)
+                loss.backward()
+                opt.step()
+        return self.get_parameters(config), len(self.trainloader.dataset), {}
+
+# Fonction de construction de l'application client
+def client_fn(context):
+    # Génération de données synthétiques pour le test
+    ds = TensorDataset(torch.randn(512, 1, 28, 28), torch.randint(0, 10, (512,)))
+    # Détection automatique du GPU CUDA
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    return FlowerClient(
+        SimpleNet(), 
+        DataLoader(ds, batch_size=32), 
+        device
+    ).to_client()
+
+# Point d'entrée pour Flower
+app = ClientApp(client_fn=client_fn)
+```
+
+
+---
+
+## 7. Résolution des Erreurs Fréquentes (Retours d'Expérience)
+
+### Erreur `AttributeError: type object 'NoneType' has no attribute 'get_parameters'`
+*   **Cause :** Le code `client.py` distribué aux nœuds est vide ou ne renvoie pas d'objet `Client`.
+*   **Solution :** Vérifier que le fichier `app/client.py` contient bien une instance de `ClientApp` valide et l'injecter à nouveau sur le Proxy.
+
+### Erreur `ModuleNotFoundError: No module named 'torch'`
+*   **Cause :** Flower a créé un environnement virtuel isolé sans installer PyTorch.
+*   **Solution :** Supprimer la section `dependencies` du `pyproject.toml` et s'assurer que l'image Docker de base (`pytorch/pytorch`) est utilisée.
+
+### Le Run ne se met pas à jour sur les clients
+*   **Cause :** Cache Flower persistant.
+*   **Solution :** Incrémenter le champ `version` dans `pyproject.toml` (ex: passer de `1.0.5` à `1.0.6`) et relancer le Run. Cela force les clients à télécharger la nouvelle version du code.
+
+
+
 ## Ajouter un nouveau site client
 Déclarer un site revient à l'ajouter dans `.env` (format `nom:ip ou nom de sshconfig`) puis à relancer `scripts/deploy.sh` ; le script synchronise le dépôt, crée le contexte Docker `ctx-<nom>` et démarre les profils `client` + `monitor` sur ce nœud.
 
